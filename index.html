@@ -109,8 +109,19 @@ select.inl{width:auto;max-width:9em;padding:4px 6px}
 .list .item{padding:9px 12px}
 .btn.big[data-act="live"]{min-height:48px;font-size:16px;font-weight:600}
 .btn[data-act="xlsx"]{background:#0d9488;color:#fff;min-height:54px;font-size:16px;font-weight:700}
-.btn.go,.btn[data-act="bulkgo"]{background:#16a34a;color:#fff;min-height:56px;font-size:16px;font-weight:700}
-</style>
+
+/* ===== 0.1.2 (CC): nhập đáp án mã còn thiếu, lưu chờ đáp án, chọn tên học sinh ===== */
+.btn[data-act="keyfor"]{background:#16a34a;color:#fff;min-height:64px;font-size:19px;font-weight:800;width:100%;box-shadow:0 3px 8px rgba(22,163,74,.35)}
+.btn[data-act="savewaitnext"]{background:var(--card);color:#b45309;border:2px solid #f59e0b;min-height:56px;font-size:17px;font-weight:700}
+.btn[data-act="savewait"]{color:#b45309;border:1.5px solid #f59e0b}
+.pick{margin:10px 0 4px}
+.pick input[type=search]{width:100%}
+.picklist{max-height:260px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;margin-top:6px}
+.pickitem{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;min-height:44px;padding:8px 12px;border:0;border-bottom:1px solid var(--line);background:var(--card);color:var(--tx);font:inherit;font-size:16px;text-align:left}
+.pickitem[hidden]{display:none}
+.pickitem small{color:var(--mut);flex:0 0 auto}
+/* ===== 0.1.2c (C2): nhập bảng tổng hợp đáp án ===== */
+.btn.keytable,.btn[data-act="bulkgo"]{background:#16a34a;color:#fff;min-height:56px;font-size:16px;font-weight:700;box-shadow:0 3px 8px rgba(22,163,74,.35)}</style>
 </head>
 <body>
 <div id="app">
@@ -124,10 +135,10 @@ select.inl{width:auto;max-width:9em;padding:4px 6px}
 <input id="fileCam" type="file" accept="image/*" capture="environment" hidden>
 <input id="filePick" type="file" accept="image/*" hidden>
 <input id="fileQr" type="file" accept="image/*" hidden>
+<input id="fileKeys" type="file" accept=".docx,.xlsx,.csv,.txt,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
 <input id="fileJson" type="file" accept=".json,application/json" hidden>
 <input id="fileRoster" type="file" accept=".xlsx,.docx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
 <input id="fileFill" type="file" accept=".docx,.xlsx" hidden>
-<input id="fileKeyTable" type="file" accept=".docx,.xlsx,.csv,.txt,text/plain,text/csv" hidden>
 <script>(function webpackUniversalModuleDefinition(root, factory) {
 	if(typeof exports === 'object' && typeof module === 'object')
 		module.exports = factory();
@@ -11010,6 +11021,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return { ok: true, key: { tab, made, p1, p2, p3 } };
   };
 
+  /** 0.1.2 — nạp NHIỀU đáp án một lần (dán nhiều dòng hoặc tệp .txt). Mỗi dòng có "CP1" hoặc "k=" được giải mã;
+   *  dòng khác (tiêu đề, "Mã đề 666", dòng trống) bỏ qua, không tính là lỗi. Cùng mã đề xuất hiện nhiều lần với đáp án
+   *  GIỐNG HỆT (ví dụ cả đường dẫn lẫn chuỗi CP1) chỉ tính một; đáp án KHÁC nhau thì giữ lần đầu, báo lỗi các lần sau.
+   *  Trả về {keys:[key], errors:[{line, text, reason}], skipped}. Không tự sửa hay đoán đáp án. */
+  K.decodeMany = function (text) {
+    const lines = String(text == null ? '' : text).replace(/^﻿/, '').split(/\r?\n/);
+    const keys = [], errors = [], seen = {};
+    let skipped = 0;
+    lines.forEach((raw, i) => {
+      const s = raw.trim();
+      if (!s || !/CP1|[#&?]k=/.test(s)) { if (s) skipped++; return; }
+      const r = K.decode(s);
+      if (!r.ok) { errors.push({ line: i + 1, text: s.length > 60 ? s.slice(0, 57) + '…' : s, reason: r.error }); return; }
+      const id = r.key.tab + ':' + r.key.made, sig = K.encode(r.key);
+      if (seen[id] != null) {
+        if (seen[id] !== sig) errors.push({ line: i + 1, text: 'mã đề ' + r.key.made, reason: 'Mã đề ' + r.key.made + ' xuất hiện lần nữa với đáp án KHÁC: giữ lần đầu.' });
+        return;
+      }
+      seen[id] = sig; keys.push(r.key);
+    });
+    return { keys, errors, skipped };
+  };
+
   /** URL để in thành QR: <gốc>#k=<chuỗi mã hoá phần trăm>. */
   K.toUrl = function (key, base) {
     return (base || '') + '#k=' + encodeURIComponent(K.encode(key));
@@ -11259,6 +11293,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (!key) return { key: null, sc: null, tong: null, max: mp, keyErr: [] };
     const keyErr = CP.scoring.validateKey(cfg, key);
     if (keyErr.length) return { key, sc: null, tong: null, max: mp, keyErr };
+    // 0.1.2: bài đọc theo cấu hình số câu cũ (ví dụ lưu chờ đáp án rồi nạp đáp án đổi số câu) -> KHÔNG chấm (câu thiếu sẽ bị tính sai im lặng).
+    const a = r.ans || {}, n1 = (a.p1 || []).length, n2 = (a.p2 || []).length, n3 = (a.p3 || []).length;
+    if (n1 !== cfg.n1 || n2 !== cfg.n2 || n3 !== cfg.n3) {
+      return { key, sc: null, tong: null, max: mp, keyErr: [], ansErr: ['Bài làm có ' + n1 + '/' + n2 + '/' + n3 + ' câu, cấu hình hiện tại ' + cfg.n1 + '/' + cfg.n2 + '/' + cfg.n3 + ': chụp lại hoặc chấm tay.'] };
+    }
     const sc = CP.scoring.score(cfg, key, ST.toScoringAnswers(r.ans));
     const tl = tabId === 'T' && r.tl > 0 ? r.tl : 0;
     return { key, sc, tong: CP.scoring.total(sc, tl), max: mp, keyErr: [] };
@@ -11290,7 +11329,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const ev = ST.evaluate(tabId, r);
       return { id: r.id, mode: r.mode, ten: ST.nameOf(tabId, r), lop: ST.lopOf(tabId, r), sbd: r.sbd, stt: r.stt, idLabel: ST.idLabel(r), made: r.made, ev, status: r.status || 'ok',
         p1: ev.sc ? ev.sc.p1.pts : 0, p2: ev.sc ? ev.sc.p2.pts : 0, p3: ev.sc ? ev.sc.p3.pts : 0,
-        tl: tabId === 'T' ? (r.tl == null ? null : r.tl) : null, tong: ev.tong == null ? 0 : ev.tong, sc: ev.sc, noKey: !ev.sc, flags: r.flags || [], raw: r };
+        tl: tabId === 'T' ? (r.tl == null ? null : r.tl) : null, tong: ev.tong == null ? 0 : ev.tong, sc: ev.sc, noKey: !ev.sc, ansErr: !!ev.ansErr, flags: r.flags || [], raw: r };
     });
   };
   ST.missing = function (tabId) {
@@ -11305,8 +11344,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const lines = [head.map(q).join(';')];
     rows.forEach((r, i) => {
       const f = (n) => U.fmt(n, 4);
-      const note = r.noKey ? 'chưa có đáp án' : r.status === 'manual' ? 'chấm tay' : r.status === 'review' ? 'cần duyệt' : '';
-      const cells = [i + 1, q(r.ten), q(r.lop), q(r.idLabel), q(r.made), f(r.p1), f(r.p2), f(r.p3)].concat(hasTL ? [r.tl == null ? '' : f(r.tl)] : []).concat([f(r.tong), q(note)]);
+      const note = r.ev.ansErr ? 'sai số câu so với cấu hình' : r.noKey ? 'chờ đáp án' : r.status === 'manual' ? 'chấm tay' : r.status === 'review' ? 'cần duyệt' : '';
+      const g = (n) => (r.noKey ? '' : f(n));   // 0.1.2: bài chưa tính điểm không ghi 0
+      const cells = [i + 1, q(r.ten), q(r.lop), q(r.idLabel), q(r.made), g(r.p1), g(r.p2), g(r.p3)].concat(hasTL ? [r.tl == null ? '' : f(r.tl)] : []).concat([g(r.tong), q(note)]);
       lines.push(cells.join(';'));
     });
     return '﻿' + lines.join('\r\n');
@@ -11782,11 +11822,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           case 'lop': return cell(r.lop || '', W[j]);
           case 'id': return cell(r.idLabel || r.sbd || '', W[j]);
           case 'made': return cell(r.made, W[j]);
-          case 'p1': return cell(f2(r.p1), W[j]);
-          case 'p2': return cell(f2(r.p2), W[j]);
-          case 'p3': return cell(f2(r.p3), W[j]);
+          case 'p1': return cell(r.noKey ? '' : f2(r.p1), W[j]);
+          case 'p2': return cell(r.noKey ? '' : f2(r.p2), W[j]);
+          case 'p3': return cell(r.noKey ? '' : f2(r.p3), W[j]);
           case 'tl': return cell(r.tl == null ? '' : f2(r.tl), W[j]);
-          default: return cell(f2(r.tong), W[j], { bold: true });
+          default: return cell(r.noKey ? 'chờ đáp án' : f2(r.tong), W[j], { bold: !r.noKey });   // 0.1.2: bài chờ đáp án không in điểm 0
         }
       });
       rows.push({ cells: c });
@@ -12294,6 +12334,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     TOO_SMALL: ['Phiếu quá nhỏ trong ảnh.', 'Lại gần hơn hoặc chụp bằng ảnh có độ phân giải cao.'],
   };
   let S = null, draft = null, cam = null, lastSource = 'file', lastFile = null, retryFor = null, fillCtx = null;
+  let parked = null;   // 0.1.2 A1: bài đang chấm được giữ lại trong lúc thầy nhập đáp án mã đề còn thiếu
 
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const tick = () => new Promise((r) => setTimeout(r, 40));
@@ -12325,8 +12366,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   function statusBadge(r) {
-    if (r.noKey) return '';
+    if (r.ansErr) return ' · ⚠ sai số câu';
+    if (r.noKey) return ' · ⏳ chờ đáp án';
     return r.status === 'manual' ? ' · ✍ chấm tay' : r.status === 'review' ? ' · ⚠ cần duyệt' : '';
+  }
+  const scoreCell = (r) => (r.ansErr ? 'sai số câu' : r.noKey ? 'chờ ĐA' : fmt(r.tong));
+  /** 0.1.2 B2: bài chờ đáp án của một tab, gom theo mã đề. */
+  function waitingByMade(tabId) {
+    const out = {};
+    ST.rows(tabId).forEach((r) => { if (r.noKey && !r.ev.ansErr) (out[r.made] = out[r.made] || []).push(r); });
+    return out;
   }
 
   function viewScan() {
@@ -12335,6 +12384,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (!ST.isPersistent()) o += '<div class="note warn">Trình duyệt không lưu được dữ liệu (chế độ riêng tư?). Hãy xuất JSON sau mỗi lần nhập.</div>';
     if (!codes.length) o += '<div class="note warn">Chưa có đáp án. Vào mục <b>Đáp án</b> để quét QR hoặc nhập tay.</div>';
     else o += '<div class="note ok">Đã có đáp án ' + codes.length + ' mã đề: ' + codes.map(h).join(', ') + '</div>';
+    const wt = waitingByMade(S.tab), wm = Object.keys(wt).sort();
+    if (wm.length) o += '<div class="note warn">Có <b>' + wm.reduce((n, m) => n + wt[m].length, 0) + '</b> bài <b>chờ đáp án</b> (mã ' + wm.map(h).join(', ') + '). Nạp đáp án là điểm tự tính. <button class="btn small" style="display:inline-flex;margin-left:6px" data-act="view" data-v="keys">Nạp đáp án</button></div>';
     if (!ST.rosterCount(S.tab)) o += '<div class="note info">Chưa có danh sách học sinh: vẫn chấm được nhưng không hiện họ tên. Thêm ở <b>Cài đặt → Danh sách học sinh</b>.</div>';
     if (cls.length) {
       o += '<div class="card"><label class="f" style="margin-top:0">Đang chấm lớp (dùng cho phiếu ghi STT 1–2 chữ số ở mục 7)</label><select data-act="lop"><option value="">(chưa chọn)</option>' +
@@ -12355,7 +12406,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       o += '<h3>Vừa chấm</h3><div class="list">';
       last.forEach((r) => {
         const ev = ST.evaluate(S.tab, r);
-        o += '<button class="item" data-act="open" data-id="' + r.id + '"><div class="n"><b>' + h(ST.nameOf(S.tab, r) || ST.idLabel(r)) + '</b><small>' + h(ST.idLabel(r)) + (ST.lopOf(S.tab, r) ? ' · ' + h(ST.lopOf(S.tab, r)) : '') + ' · mã đề ' + h(r.made) + h(statusBadge({ noKey: !ev.sc, status: r.status })) + '</small></div><div class="s' + (ev.sc ? '' : ' none') + '">' + (ev.sc ? fmt(ev.tong) : 'chưa có ĐA') + '</div></button>';
+        const rr = { noKey: !ev.sc, ansErr: !!ev.ansErr, status: r.status, tong: ev.tong };
+        o += '<button class="item" data-act="open" data-id="' + r.id + '"><div class="n"><b>' + h(ST.nameOf(S.tab, r) || ST.idLabel(r)) + '</b><small>' + h(ST.idLabel(r)) + (ST.lopOf(S.tab, r) ? ' · ' + h(ST.lopOf(S.tab, r)) : '') + ' · mã đề ' + h(r.made) + h(statusBadge(rr)) + '</small></div><div class="s' + (ev.sc ? '' : ' none') + '">' + scoreCell(rr) + '</div></button>';
       });
       o += '</div>';
     }
@@ -12367,9 +12419,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function viewKeys() {
     const t = tab(), cfg = ST.cfg(), codes = Object.keys(t.keys).sort();
     let o = '<h2>Đáp án — ' + TABNAME[S.tab] + '</h2>';
-    o += '<label class="btn go" for="fileKeyTable">📑 Nhập bảng tổng hợp đáp án (Word, Excel, .txt): nhiều mã một lần</label>';
+    o += '<label class="btn keytable" for="fileKeys">📑 Nhập bảng tổng hợp đáp án (Word, Excel, .txt, .csv): nhiều mã một lần</label>';
     o += '<div class="grid2"><button class="btn primary" data-act="qrcam">📷 Quét QR đáp án</button><label class="btn" for="fileQr">🖼️ QR từ ảnh</label></div>';
-    o += '<div class="grid2"><button class="btn" data-act="manual">✍️ Nhập tay</button><button class="btn" data-act="paste">📋 Dán mã / đường dẫn</button></div>';
+    o += '<div class="grid2"><button class="btn" data-act="manual">✍️ Nhập tay</button><button class="btn" data-act="paste">📋 Dán mã / đường dẫn / bảng</button></div>';
+    const wt = waitingByMade(S.tab), wm = Object.keys(wt).sort();
+    if (wm.length) o += '<div class="note warn">Bài <b>chờ đáp án</b>: ' + wm.map((m) => 'mã ' + h(m) + ' (' + wt[m].length + ' bài)').join(', ') + '. Nạp đáp án là điểm tự tính.</div>';
     o += '<h3>Các mã đề (' + codes.length + ')</h3>';
     if (!codes.length) o += '<div class="note info">Chưa có mã đề nào.</div>';
     codes.forEach((c) => {
@@ -12401,7 +12455,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (miss) o += '<button class="btn" data-act="missing">👥 Còn thiếu ' + miss + ' học sinh chưa có bài</button>';
     o += '<div class="list">';
     rows.forEach((r) => {
-      o += '<button class="item" data-act="open" data-id="' + r.id + '"><div class="n"><b>' + h(r.ten || '(chưa có trong danh sách)') + '</b><small>' + h(r.idLabel) + (r.lop ? ' · ' + h(r.lop) : '') + ' · mã đề ' + h(r.made) + h(statusBadge(r)) + '</small></div><div class="s' + (r.noKey ? ' none' : '') + '">' + (r.noKey ? 'chưa có ĐA' : fmt(r.tong)) + '</div></button>';
+      o += '<button class="item" data-act="open" data-id="' + r.id + '"><div class="n"><b>' + h(r.ten || '(chưa có trong danh sách)') + '</b><small>' + h(r.idLabel) + (r.lop ? ' · ' + h(r.lop) : '') + ' · mã đề ' + h(r.made) + h(statusBadge(r)) + '</small></div><div class="s' + (r.noKey ? ' none' : '') + '">' + scoreCell(r) + '</div></button>';
     });
     o += '</div>';
     if (!rows.length) o += '<div class="note info">Chưa có bài nào. Sang mục Quét.</div>';
@@ -12435,7 +12489,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     o += '<h3>Thống kê chụp</h3><div class="card"><div class="kv"><span>Đạt ngay</span><span>' + (stt.ok || 0) + '</span></div><div class="kv"><span>Cần duyệt</span><span>' + (stt.review || 0) + '</span></div><div class="kv"><span>Chấm tay</span><span>' + (stt.manual || 0) + '</span></div><div class="kv"><span>Không đọc được (chụp lại)</span><span>' + (stt.retry || 0) + '</span></div>' +
       Object.keys(stt.reasons || {}).map((k) => '<div class="kv"><span>— ' + h(k) + '</span><span>' + stt.reasons[k] + '</span></div>').join('') + '</div>';
     o += '<h3>Dữ liệu</h3><div class="grid2"><button class="btn" data-act="backup">💾 Sao lưu JSON</button><label class="btn" for="fileJson">♻️ Khôi phục</label></div>';
-    o += '<div class="foot-note">Chấm trắc nghiệm · bản 0.1.1 · © thầy Lê Hùng — THPT Bắc Sơn<br>Dữ liệu chỉ lưu trên máy này, không gửi đi đâu.</div>';
+    o += '<div class="foot-note">Chấm trắc nghiệm · bản 0.1.2 · © thầy Lê Hùng — THPT Bắc Sơn<br>Dữ liệu chỉ lưu trên máy này, không gửi đi đâu.</div>';
     return o;
   }
 
@@ -12507,6 +12561,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     let mode = 'none', sbd = '', stt = null;
     if (digits.length >= 3) { mode = 'sbd'; sbd = digits; }
     else if (digits.length >= 1) { mode = 'stt'; stt = parseInt(digits, 10); }
+    else mode = defaultMode(tabId);   // 0.1.2 A3: phiếu không đọc được mục 7 -> chọn sẵn theo loại danh sách
     const d = {
       id: uid(), ts: Date.now(), tabId, mode, sbd, stt, lop: mode === 'stt' ? (t.activeLop || '') : '', made: f.made.str, layout: res.layoutId, tl: null, name: '', fixed: {}, isNew: true, source: lastSource, manual: false,
       ans: {
@@ -12520,10 +12575,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     retryFor = null;
     return d;
   }
+  /** 0.1.2 A3: chế độ chọn sẵn khi phiếu chưa có SBD/STT: chỉ có danh sách lớp -> STT; chỉ có danh sách phòng -> SBD; cả hai hoặc chưa có -> để thầy chọn. */
+  function defaultMode(tabId) {
+    const ls = ST.lists(tabId), hasC = ls.some((l) => l.kind === 'class'), hasR = ls.some((l) => l.kind === 'room');
+    return hasC && !hasR ? 'stt' : hasR && !hasC ? 'sbd' : 'none';
+  }
   function newManualDraft(tabId, retryId) {
     const cfg = ST.cfg(tabId), t = ST.tab(tabId), codes = Object.keys(t.keys);
     return {
-      id: uid(), ts: Date.now(), tabId, mode: 'none', sbd: '', stt: null, lop: t.activeLop || '', made: codes.length === 1 ? codes[0] : '', layout: '', tl: null, name: '', fixed: {}, isNew: true, source: 'manual', manual: true,
+      id: uid(), ts: Date.now(), tabId, mode: defaultMode(tabId), sbd: '', stt: null, lop: t.activeLop || '', made: codes.length === 1 ? codes[0] : '', layout: '', tl: null, name: '', fixed: {}, isNew: true, source: 'manual', manual: true,
       ans: { p1: Array(cfg.n1).fill(''), p2: Array.from({ length: cfg.n2 }, () => ['', '', '', '']), p3: Array(cfg.n3).fill('') },
       flags: [{ field: 'sheet', q: 0, type: 'manual', severity: 'info', text: 'Chấm tay' }], omr: { bubbles: [] }, canvas: null, retryFor: retryId || null,
     };
@@ -12531,11 +12591,24 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   /* ===================================================== thẻ kết quả */
   function flagKey(f) { return f.field === 'sbd' || f.field === 'made' || f.field === 'sheet' ? f.field : f.field + '-' + (f.q - 1); }
+  const idOk = (d) => (d.mode === 'sbd' ? /^\d{3,}$/.test(d.sbd) : d.mode === 'stt' ? d.stt >= 1 : false);
+  /** 0.1.2 A4: cờ vàng (warn) hết khi thầy sửa ô hoặc bấm "Tôi đã đối chiếu"; cờ đỏ (error) chỉ hết khi SỬA THẬT:
+   *  SBD/STT do thầy nhập/chọn và hợp lệ; mã đề do thầy nhập và là số; cờ của cả tờ phiếu (sheet) không xác nhận được. */
+  function flagResolved(d, f) {
+    const k = flagKey(f);
+    if (f.severity !== 'error') return !!d.fixed[k];
+    if (k === 'sbd') return !!d.fixed.sbd && idOk(d);
+    if (k === 'made') return !!d.fixed.made && /^\d+$/.test(d.made);
+    if (k === 'sheet') return false;
+    return !!d.fixed[k];
+  }
   function flagSet(d) {
     const s = {};
-    (d.flags || []).forEach((f) => { if (f.severity !== 'info' && !d.fixed[flagKey(f)]) s[flagKey(f)] = f; });
+    (d.flags || []).forEach((f) => { if (f.severity !== 'info' && !flagResolved(d, f)) s[flagKey(f)] = f; });
     return s;
   }
+  /** Mã đề hợp lệ nhưng chưa có đáp án dùng được (chưa nhập hoặc sai số câu) -> bài có thể "chờ đáp án". */
+  const needsKey = (d, ev) => /^\d+$/.test(d.made) && !ev.sc && !ev.ansErr;
   const dd = (a) => (a === 'D' ? 'Đ' : a || '·');
 
   function identHtml(d, ev) {
@@ -12553,26 +12626,53 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return { html: o, lk, near: d.mode === 'sbd' && !lk.found && /^\d{3,}$/.test(d.sbd) ? R.nearBySbd(t.lists, d.sbd) : [] };
   }
 
+  /** 0.1.2 A2: phiếu chưa có SBD/STT -> chạm tên học sinh CHƯA CÓ BÀI (có ô tìm, không phân biệt dấu). */
+  function pickerHtml(d) {
+    const miss = ST.missing(d.tabId);
+    if (!miss.length) return '';
+    let o = '<div class="pick"><label class="f">Chạm tên học sinh chưa có bài (' + miss.length + ' em)</label><input type="search" data-act="pickq" placeholder="Tìm theo tên, SBD hoặc STT…" autocomplete="off"><div class="picklist">';
+    miss.forEach((m) => {
+      const idl = m.kind === 'room' ? 'SBD ' + m.sbd : 'STT ' + m.stt;
+      const lop = m.lop || '';
+      o += '<button class="pickitem" data-act="pick" data-kind="' + m.kind + '" data-sbd="' + h(m.sbd || '') + '" data-stt="' + (m.stt == null ? '' : m.stt) + '" data-lop="' + h(lop) + '" data-s="' + h(R.fold(m.name + ' ' + idl + ' ' + lop)) + '"><b>' + h(m.name) + '</b><small>' + h(idl) + (lop ? ' · ' + h(lop) : '') + '</small></button>';
+    });
+    return o + '</div><div class="meta picknone" hidden>Không có tên nào khớp.</div></div>';
+  }
+  function filterPicker(q) {
+    const f = R.fold(String(q || '').trim());
+    let n = 0;
+    doc.querySelectorAll('#modal .pickitem').forEach((b) => { const on = !f || (b.dataset.s || '').indexOf(f) >= 0; b.hidden = !on; if (on) n++; });
+    const none = $('#modal .picknone'); if (none) none.hidden = n > 0;
+  }
+
   function cardHtml(d) {
     const tabId = d.tabId, cfg = ST.cfg(tabId), ev = ST.evaluate(tabId, d), mp = ev.max, sc = ev.sc, fs = flagSet(d), t = ST.tab(tabId);
     const idn = identHtml(d, ev), lk = idn.lk, name = d.name || lk.name;
     let o = '<div class="card">';
     if (name) o += '<div class="name">' + h(name) + '</div>';
     else if (lk.ambiguous) o += '<div class="name miss">SBD trùng ở nhiều danh sách</div>';
-    else if (d.mode === 'none') o += '<div class="name miss">Nhập số báo danh hoặc STT</div>';
+    else if (d.mode === 'none' || !idOk(d)) o += '<div class="name miss">Chưa có SBD hoặc STT</div>';
     else if (d.mode === 'stt' && ST.classNames(tabId).length && !d.lop) o += '<div class="name miss">Chưa chọn lớp</div>';
     else o += '<div class="name miss">Chưa có trong danh sách</div><div class="row" style="margin-top:8px"><input id="nm" type="text" placeholder="Nhập họ tên (không bắt buộc)" value="' + h(d.name || '') + '"><button class="btn small" style="flex:0 0 auto" data-act="setname">Lưu tên</button></div>';
     if (lk.found && (lk.lop || d.lop) && d.mode === 'sbd') o += '<div class="meta" style="margin:2px 0 0">Lớp ' + h(lk.lop) + '</div>';
     o += idn.html;
     idn.near.forEach((n) => { o += '<button class="btn small" style="margin:0 6px 6px 0;display:inline-flex" data-act="usesbd" data-v="' + h(n.sbd) + '">Có phải ' + h(n.sbd) + ' — ' + h(n.name) + '?</button>'; });
+    if (!idOk(d) || fs.sbd) o += pickerHtml(d);
+    if (tabId === 'T' && cfg.n2) {   // 0.1.2 B3: đổi cách tính Phần II ngay trên thẻ (áp dụng cho cả tab, tính lại ngay)
+      o += '<div class="row" style="margin-top:10px;align-items:center"><span class="meta" style="margin:0;flex:0 0 auto">Phần II:</span><select class="inl" data-act="cardp2" style="flex:1">' +
+        '<option value="bo"' + (cfg.p2Mode === 'bo' ? ' selected' : '') + '>Thang Bộ (0,1/0,25/0,5/1)</option>' +
+        '<option value="ymenh"' + (cfg.p2Mode === 'ymenh' ? ' selected' : '') + '>' + fmt(cfg.p2PtYmenh) + 'đ/ý</option></select></div>';
+    }
     o += '<div class="tiles">' + [['Phần 1', 'p1'], ['Phần 2', 'p2'], ['Phần 3', 'p3']].map((p) => '<div class="tile"><div class="l">' + p[0] + '</div><div class="v">' + (sc ? fmt(sc[p[1]].pts) : '—') + '</div><div class="m">/ ' + fmt(mp[p[1]]) + '</div></div>').join('') + '</div>';
-    o += '<div class="total' + (sc ? '' : ' none') + '"><div class="l">TỔNG ĐIỂM' + (tabId === 'T' && cfg.tlMax > 0 ? ' (trắc nghiệm + tự luận)' : '') + '</div><div class="v">' + (sc ? fmt(ev.tong) : '—') + '</div><div class="m">' + (sc ? 'trên ' + fmt(tabId === 'T' ? mp.total : mp.tn) : (ev.keyErr && ev.keyErr.length ? 'Đáp án mã đề ' + h(d.made) + ' sai số câu (xem mục Đáp án)' : 'Chưa có đáp án mã đề ' + h(d.made))) + '</div></div>';
+    o += '<div class="total' + (sc ? '' : ' none') + '"><div class="l">TỔNG ĐIỂM' + (tabId === 'T' && cfg.tlMax > 0 ? ' (trắc nghiệm + tự luận)' : '') + '</div><div class="v">' + (sc ? fmt(ev.tong) : '—') + '</div><div class="m">' + (sc ? 'trên ' + fmt(tabId === 'T' ? mp.total : mp.tn) : ev.ansErr ? h(ev.ansErr[0]) : (ev.keyErr && ev.keyErr.length ? 'Đáp án mã đề ' + h(d.made) + ' sai số câu (xem mục Đáp án)' : 'Chưa có đáp án mã đề ' + h(d.made))) + '</div></div>';
+    if (needsKey(d, ev)) o += '<button class="btn primary" data-act="keyfor" style="margin-top:10px">🔑 Nhập đáp án mã ' + h(d.made) + '</button>';
     if (tabId === 'T' && cfg.tlMax > 0) o += '<label class="f">Điểm tự luận (nhập tay, tối đa ' + fmt(cfg.tlMax) + ')</label><input type="text" inputmode="decimal" data-act="tl" value="' + (d.tl == null ? '' : String(d.tl).replace('.', ',')) + '">';
     const unresolved = Object.keys(fs).map((k) => fs[k]);
     const pills = [];
     if (d.mode === 'none') pills.push('<span class="pill err">Chưa có SBD hoặc STT</span>');
     if (d.mode === 'sbd' && !/^\d{3,}$/.test(d.sbd)) pills.push('<span class="pill err">SBD cần từ 3 chữ số</span>');
     if (d.mode === 'stt') {
+      if (!(d.stt >= 1)) pills.push('<span class="pill err">Chưa có STT</span>');
       const cl = d.lop ? t.lists.find((l) => l.kind === 'class' && R.fold(l.name) === R.fold(d.lop)) : null;
       if (cl && d.stt > cl.rows.length) pills.push('<span class="pill err">STT lớn hơn số học sinh lớp ' + h(d.lop) + ' (' + cl.rows.length + ')</span>');
       if (ST.classNames(tabId).length && !d.lop) pills.push('<span class="pill err">Chưa chọn lớp</span>');
@@ -12580,11 +12680,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (!/^\d+$/.test(d.made)) pills.push('<span class="pill err">Mã đề chưa đọc được</span>');
     else if (!ev.key) pills.push('<span class="pill err">Mã đề ' + h(d.made) + ' chưa có đáp án</span>');
     else if (ev.keyErr && ev.keyErr.length) pills.push('<span class="pill err">' + h(ev.keyErr[0]) + '</span>');
+    if (ev.ansErr) pills.push('<span class="pill err">' + h(ev.ansErr[0]) + '</span>');
     const nFaint = unresolved.filter((f) => f.type === 'faint').length;
     if (nFaint >= 4) pills.unshift('<span class="pill err">⚠ Ảnh có ' + nFaint + ' ô tô mờ: có thể thiếu sáng hoặc nhòe. Nên CHỤP LẠI trước khi lưu (ô tô đậm có thể bị bỏ sót).</span>');
     unresolved.forEach((f) => pills.push('<span class="pill' + (f.severity === 'error' ? ' err' : '') + '">' + h(f.text) + '</span>'));
     if (pills.length) o += '<div style="margin-top:12px">' + pills.join('') + '</div>';
-    if (unresolved.length && !d.manual) o += '<div class="note warn" style="margin-top:10px">Điểm chỉ <b>chính thức</b> khi các ô có cờ đã được thầy đối chiếu với tờ giấy (mở "Ảnh đối chiếu"). Sửa ô sai bằng cách chạm vào ô, hoặc bấm xác nhận nếu app đã đọc đúng.</div><button class="btn small" data-act="confirmflags" style="width:100%">✔ Tôi đã đối chiếu: các ô cờ đúng như app đọc</button>';
+    const uWarn = unresolved.filter((f) => f.severity === 'warn'), uErr = unresolved.filter((f) => f.severity === 'error');
+    if (uErr.length) o += '<div class="note bad" style="margin-top:10px">Cờ đỏ phải <b>sửa thật</b> mới lưu được: nhập lại số báo danh/STT hoặc chạm tên học sinh, nhập lại mã đề' + (uErr.some((f) => f.field === 'sheet') ? '; lỗi của cả tờ phiếu: chụp lại hoặc chấm tay' : '') + '.</div>';
+    if (uWarn.length && !d.manual) o += '<div class="note warn" style="margin-top:10px">Điểm chỉ <b>chính thức</b> khi các ô có cờ vàng đã được thầy đối chiếu với tờ giấy (mở "Ảnh đối chiếu"). Sửa ô sai bằng cách chạm vào ô, hoặc bấm xác nhận nếu app đã đọc đúng.</div><button class="btn small" data-act="confirmflags" style="width:100%">✔ Tôi đã đối chiếu: các ô cờ vàng đúng như app đọc</button>';
     o += '</div>';
 
     o += '<details' + (unresolved.length || d.manual ? ' open' : '') + '><summary>Chi tiết đáp án (chạm ô để sửa)</summary>';
@@ -12618,7 +12721,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (d.canvas) o += '<details><summary>Ảnh đối chiếu</summary><canvas id="ov"></canvas><div class="meta" style="font-size:13px">Xanh: đúng · Đỏ: sai · Cam: tô mờ · Vòng xanh nét đứt: đáp án đúng ở câu sai</div></details>';
     else if (!d.isNew || d.manual) o += '<details id="thumbbox" hidden><summary>Ảnh phiếu đã lưu</summary><img id="thumbimg" alt="" style="width:100%;border-radius:10px"></details>';
     o += '<div style="margin-top:14px">';
-    if (d.isNew) o += '<button class="btn primary big" data-act="savenext">Lưu và chấm bài tiếp</button><div class="grid2"><button class="btn" data-act="save">Lưu</button><button class="btn danger" data-act="discard">Bỏ bài này</button></div>';
+    if (d.isNew && needsKey(d, ev)) o += '<button class="btn big" data-act="savewaitnext">⏳ Lưu chờ đáp án, chấm bài tiếp</button><div class="grid2"><button class="btn" data-act="savewait">⏳ Lưu chờ đáp án</button><button class="btn danger" data-act="discard">Bỏ bài này</button></div>';
+    else if (d.isNew) o += '<button class="btn primary big" data-act="savenext">Lưu và chấm bài tiếp</button><div class="grid2"><button class="btn" data-act="save">Lưu</button><button class="btn danger" data-act="discard">Bỏ bài này</button></div>';
     else o += '<button class="btn primary" data-act="save">Lưu thay đổi</button><div class="grid2"><button class="btn danger" data-act="del">Xóa bài</button><button class="btn" data-act="close">Đóng</button></div>';
     o += '</div>';
     return o;
@@ -12653,14 +12757,21 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
   }
 
-  function saveDraft(next) {
+  function saveDraft(next, wait) {
     const d = draft, tabId = d.tabId, t = ST.tab(tabId);
     if (d.mode === 'sbd') { if (!/^\d{3,}$/.test(d.sbd)) { toast('Số báo danh phải có từ 3 chữ số. Sửa lại hoặc chuyển sang "STT trong lớp".', 4200); return; } }
     else if (d.mode === 'stt') {
-      if (!(d.stt >= 1)) { toast('Nhập số thứ tự (STT) trong lớp.', 3500); return; }
+      if (!(d.stt >= 1)) { toast('Nhập số thứ tự (STT) trong lớp, hoặc chạm tên học sinh.', 3500); return; }
       if (ST.classNames(tabId).length && !d.lop) { toast('Chọn lớp trước khi lưu: STT chỉ có nghĩa trong một lớp.', 4200); return; }
-    } else { toast('Chưa có số báo danh hoặc STT. Nhập trước khi lưu.', 3800); return; }
+    } else { toast('Chưa có số báo danh hoặc STT. Nhập hoặc chạm tên học sinh trước khi lưu.', 3800); return; }
     if (!/^\d+$/.test(d.made)) { toast('Mã đề chưa hợp lệ. Sửa lại trước khi lưu.', 3800); return; }
+    // 0.1.2 A4: cờ đỏ chưa sửa thật -> không lưu
+    const errs = Object.keys(flagSet(d)).map((k) => flagSet(d)[k]).filter((f) => f.severity === 'error');
+    if (errs.length) { toast('Còn cờ đỏ phải sửa trước khi lưu: ' + errs.map((f) => f.text).join('; '), 5000); return; }
+    // 0.1.2 B2: mã đề chưa có đáp án -> chỉ lưu khi thầy chọn "Lưu chờ đáp án" (bài mới); bài đã lưu thì giữ trạng thái chờ
+    const ev0 = ST.evaluate(tabId, d);
+    if (ev0.ansErr && d.isNew) { toast(ev0.ansErr[0], 5000); return; }
+    if (needsKey(d, ev0) && d.isNew && !wait) { toast('Mã đề ' + d.made + ' chưa có đáp án: bấm "Nhập đáp án mã ' + d.made + '" hoặc "Lưu chờ đáp án".', 5000); return; }
     const rec = { id: d.id, ts: d.ts, mode: d.mode, sbd: d.mode === 'sbd' ? d.sbd : '', stt: d.mode === 'stt' ? d.stt : null, lop: d.mode === 'stt' ? d.lop : '', made: d.made, layout: d.layout, ans: d.ans, tl: d.tl, name: d.name || '', flags: d.flags, fixed: d.fixed };
     const k = ST.identKey(rec);
     const dup = t.results.find((r) => ST.identKey(r) === k && r.id !== d.id);
@@ -12674,7 +12785,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     ST.save(true);
     const src = d.source, label = ST.nameOf(tabId, rec) || ST.idLabel(rec);
     closeModal(); render();
-    toast('Đã lưu ' + label);
+    toast('Đã lưu ' + label + (needsKey(d, ev0) ? ' (chờ đáp án mã ' + d.made + ')' : ''));
     if (next && src === 'live' && CP.camera.supported()) openLive();
   }
 
@@ -12714,76 +12825,130 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   /* ===================================================== đáp án */
+  /** Thêm một đáp án NHẬP TAY (ô "Nhập tay"). Trả về true hoặc danh sách lỗi. Các nguồn khác đi qua showKeySource/applyBulk. */
   function addKey(key) {
     const tabId = key.tab, cfg = ST.cfg(tabId), t = ST.tab(tabId);
     if (tabId === 'T') {
       const diff = key.p1.length !== cfg.n1 || key.p2.length !== cfg.n2 || key.p3.length !== cfg.n3;
       if (diff) {
         const first = !Object.keys(t.keys).length;
-        if (first || root.confirm('Mã đề này có P1 ' + key.p1.length + ', P2 ' + key.p2.length + ', P3 ' + key.p3.length + ' câu, khác cấu hình hiện tại. Đặt lại số câu theo mã đề?')) { cfg.n1 = key.p1.length; cfg.n2 = key.p2.length; cfg.n3 = key.p3.length; }
+        if (first || root.confirm('Mã đề ' + key.made + ' có P1 ' + key.p1.length + ', P2 ' + key.p2.length + ', P3 ' + key.p3.length + ' câu, khác cấu hình hiện tại. Đặt lại số câu theo mã đề?')) { cfg.n1 = key.p1.length; cfg.n2 = key.p2.length; cfg.n3 = key.p3.length; }
       }
     }
     const errs = SC.validateKey(cfg, key);
     if (tabId === 'B') { if (key.p1.length !== cfg.n1) errs.push('Tab Bộ GD cần đúng ' + cfg.n1 + ' câu Phần I (mã có ' + key.p1.length + ').'); }
-    if (errs.length) { openModal('Đáp án chưa hợp lệ', '<div class="note bad">' + errs.map(h).join('<br>') + '</div><button class="btn" data-act="close">Đóng</button>'); return false; }
+    if (errs.length) return errs;
     t.keys[key.made] = key;
-    S.tab = tabId; S.view = 'keys';
     ST.save(true);
     return true;
   }
+  /* ---- 0.1.2c C2: MỘT đường nhập đáp án cho mọi nguồn: dán (nhiều dòng CP1/đường dẫn, hoặc bảng dán từ Excel), tệp .txt/.csv/.docx/.xlsx,
+   *      QR, đường dẫn #k=. Nguồn -> CP.keytable (res) -> CP.keytable.plan() chọn tab theo số chữ số mã đề -> hộp xem trước -> Nhập.
+   *      Giữ cách báo của B1: "Đã nạp N mã, bỏ M dòng lỗi" kèm lý do từng dòng. */
   let bulkCtx = null;
-  function bulkHtml(plan, res, src) {
-    const good = plan.rows.filter((r) => r.ok), bad = plan.rows.filter((r) => !r.ok);
-    const t = (tb) => ST.tab(tb).keys;
-    let o = '<div class="note info">Nguồn: <b>' + h(src) + '</b>. Đọc được <b>' + plan.rows.length + '</b> mã đề: <b>' + good.length + '</b> hợp lệ' + (bad.length ? ', <b>' + bad.length + '</b> lỗi (không nhập)' : '') + '.</div>';
-    if (plan.setCfg) o += '<div class="note warn">Cấu hình tab Phiếu tự chọn sẽ đổi thành <b>P1 ' + plan.setCfg.n1 + ' · P2 ' + plan.setCfg.n2 + ' · P3 ' + plan.setCfg.n3 + '</b> câu cho khớp bảng.</div>';
-    o += '<div class="card">' + plan.rows.map((r) => {
-      const had = t(r.tab)[r.made] ? ' · <small>thay mã cũ</small>' : '';
-      return '<div class="kv"><span><b style="font-size:18px">' + h(r.made) + '</b> · ' + (r.tab === 'B' ? 'Bộ GD' : 'Tự chọn') + ' · P1 ' + r.key.p1.length + ' P2 ' + r.key.p2.length + ' P3 ' + r.key.p3.length + had + '</span><span style="color:' + (r.ok ? 'var(--ok)' : 'var(--bad)') + ';font-weight:700">' + (r.ok ? '✓' : 'lỗi') + '</span></div>' + (r.ok ? '' : '<div class="meta" style="margin:0 0 6px;color:var(--bad)">' + r.errs.slice(0, 3).map(h).join('; ') + '</div>');
-    }).join('') + '</div>';
-    (res.notes || []).forEach((n) => { o += '<div class="note warn">' + h(n) + '</div>'; });
-    o += good.length ? '<button class="btn go big" data-act="bulkgo">Nhập ' + good.length + ' mã đề</button>' : '<div class="note bad">Không có mã nào hợp lệ để nhập.</div>';
-    return o + '<button class="btn" data-act="close">Hủy</button>';
-  }
-  function showBulk(res, src) {
-    if (!res.keys.length) { openModal('Không đọc được bảng đáp án', '<div class="note bad">Không thấy bảng có cột "Mã đề" và các cột câu (1…n, 1a…, …). Kiểm tra lại tệp, hoặc dán từng mã CP1.</div><button class="btn" data-act="close">Đóng</button>'); return; }
-    const plan = CP.keytable.plan(res, ST.cfg('T'), SC.CONFIG_B);
-    bulkCtx = { plan };
-    openModal('Nhập bảng đáp án', bulkHtml(plan, res, src));
-  }
-  function applyBulk() {
-    if (!bulkCtx) return; const plan = bulkCtx.plan; const tT = ST.tab('T');
-    if (plan.setCfg) {
-      const others = Object.keys(tT.keys).filter((m) => !plan.rows.some((r) => r.ok && r.tab === 'T' && r.made === m));
-      if (others.length && !root.confirm('Đổi số câu sẽ làm các mã cũ (' + others.join(', ') + ') thành không hợp lệ cho đến khi nhập lại. Tiếp tục?')) return;
-      Object.assign(ST.cfg('T'), plan.setCfg);
+  const backAct = () => (parked ? 'keyback' : 'close');
+  const backBtn = (lbl) => '<button class="btn' + (parked ? ' primary' : '') + '" data-act="' + backAct() + '">' + (parked ? '↩ Quay lại bài đang chấm' : lbl || 'Đóng') + '</button>';
+  /** Văn bản -> res. Có CP1 hoặc "k=": giải mã từng dòng (B1, lỗi kèm số dòng); không có: đọc như bảng dán từ Excel/Word. */
+  function parseKeyText(text) {
+    const s = String(text == null ? '' : text).replace(/^﻿/, '');
+    if (/CP1|[#&?]k=/.test(s)) {
+      const m = K.decodeMany(s);
+      return { keys: m.keys.map((k) => ({ made: k.made, p1: k.p1, p2: k.p2, p3: k.p3, count: [k.p1.length, k.p2.length, k.p3.length], errs: [], tab: k.tab })), notes: [], lineErrs: m.errors.map((e) => 'Dòng ' + e.line + ': ' + e.reason) };
     }
-    let n = 0, firstTab = null;
-    plan.rows.filter((r) => r.ok).forEach((r) => {
-      const errs = SC.validateKey(ST.cfg(r.tab), r.key); if (errs.length) return;
-      ST.tab(r.tab).keys[r.made] = r.key; n++; firstTab = firstTab || r.tab;
-    });
-    if (firstTab) S.tab = firstTab; S.view = 'keys'; ST.save(true); bulkCtx = null; closeModal(); render(); toast('Đã nhập ' + n + ' mã đề', 3500);
+    const r = CP.keytable.fromText(s); r.lineErrs = []; return r;
   }
-  async function importKeyTableFile(file) {
-    busy('Đang đọc bảng đáp án…');
+  function importKeysText(text, src) { return showKeySource(parseKeyText(text), src || 'văn bản dán'); }
+  async function importKeyFile(file) {
+    busy('Đang đọc đáp án…');
     try {
-      const buf = await file.arrayBuffer(); const name = file.name; let res;
-      if (/\.docx$/i.test(name)) res = await CP.keytable.fromDocx(buf);
-      else if (/\.xlsx$/i.test(name)) res = await CP.keytable.fromXlsx(buf);
-      else res = CP.keytable.fromText(new TextDecoder('utf-8').decode(buf).replace(/^\ufeff/, ''));
-      unbusy(); showBulk(res, name);
+      const buf = await file.arrayBuffer(), nm = file.name; let res;
+      if (/\.docx$/i.test(nm)) res = await CP.keytable.fromDocx(buf);
+      else if (/\.xlsx$/i.test(nm)) res = await CP.keytable.fromXlsx(buf);
+      else if (/\.(xls|doc)$/i.test(nm)) { unbusy(); toast('Tệp .xls/.doc cũ chưa đọc được: mở bằng Excel/Word rồi "Lưu thành" .xlsx/.docx.', 5000); return; }
+      else res = parseKeyText(new TextDecoder('utf-8').decode(buf));
+      res.lineErrs = res.lineErrs || [];
+      unbusy(); showKeySource(res, nm);
     } catch (e) { unbusy(); toast('Không đọc được tệp: ' + e.message, 5000); }
   }
-  function importKeyText(text) {
-    const multi = CP.keytable.fromText(text);
-    if (multi.keys.length > 1 || (multi.fromTable && multi.keys.length)) { showBulk(multi, 'văn bản dán'); return true; }
-    const r = K.decode(text);
-    if (!r.ok) { openModal('Không đọc được mã đáp án', '<div class="note bad">' + h(r.error) + '</div><button class="btn" data-act="close">Đóng</button>'); return false; }
-    const had = !!ST.tab(r.key.tab).keys[r.key.made];
-    if (had && !root.confirm('Mã đề ' + r.key.made + ' đã có. Thay bằng đáp án mới?')) return false;
-    if (addKey(r.key)) { closeModal(); render(); toast('Đã nhập đáp án mã đề ' + r.key.made + ' (' + TABNAME[r.key.tab] + ')'); return true; }
-    return false;
+  const sameKey = (a, b) => K.encode(Object.assign({}, a, { tab: b.tab, made: b.made })) === K.encode(b);
+  /** Lập kế hoạch rồi: một mã hợp lệ, không lỗi, không đổi cấu hình, không thay mã cũ -> nhập luôn (QR, một đường dẫn); còn lại -> hộp xem trước. */
+  function showKeySource(res, src) {
+    if (!res.keys.length) {
+      const msg = res.lineErrs.length ? res.lineErrs : ['Không thấy mã CP1, đường dẫn #k= hoặc bảng có cột "Mã đề" và các cột câu (1…n, 1a…, …).'];
+      openModal('Không đọc được mã đáp án', '<div class="note bad">' + msg.map(h).join('<br>') + '</div>' + backBtn(), backAct());
+      return false;
+    }
+    const plan = CP.keytable.plan(res, ST.cfg('T'), SC.CONFIG_B);
+    bulkCtx = { plan, res, src };
+    const r0 = plan.rows[0], old0 = r0 && ST.tab(r0.tab).keys[r0.made];
+    if (plan.rows.length === 1 && r0.ok && !plan.setCfg && !res.lineErrs.length && !(res.notes || []).length && !(old0 && !sameKey(old0, r0.key))) return applyBulk();
+    openModal('Nhập bảng đáp án', bulkHtml(plan, res, src), backAct());
+    return true;
+  }
+  function bulkHtml(plan, res, src) {
+    const good = plan.rows.filter((r) => r.ok), bad = plan.rows.filter((r) => !r.ok);
+    let o = '<div class="note info">Nguồn: <b>' + h(src) + '</b>. Đọc được <b>' + plan.rows.length + '</b> mã đề: <b>' + good.length + '</b> hợp lệ' + (bad.length ? ', <b>' + bad.length + '</b> lỗi (không nhập)' : '') + (res.lineErrs.length ? ', <b>' + res.lineErrs.length + '</b> dòng không đọc được' : '') + '.</div>';
+    if (plan.setCfg) o += '<div class="note warn">Cấu hình sẽ đổi thành <b>P1 ' + plan.setCfg.n1 + ' · P2 ' + plan.setCfg.n2 + ' · P3 ' + plan.setCfg.n3 + '</b> (tab Phiếu tự chọn) cho khớp bảng.</div>';
+    o += '<div class="card">' + plan.rows.map((r) => {
+      const old = ST.tab(r.tab).keys[r.made], had = old ? (sameKey(old, r.key) ? ' · <small>đã có, giống hệt</small>' : ' · <small style="color:var(--warn)">thay mã cũ</small>') : '';
+      return '<div class="kv"><span><b style="font-size:18px">' + h(r.made) + '</b> · ' + (r.tab === 'B' ? 'Bộ GD' : 'Tự chọn') + ' · P1 ' + r.key.p1.length + ' P2 ' + r.key.p2.length + ' P3 ' + r.key.p3.length + had + '</span><span style="color:' + (r.ok ? 'var(--ok)' : 'var(--bad)') + ';font-weight:700">' + (r.ok ? '✓' : 'lỗi') + '</span></div>' + (r.ok ? '' : '<div class="meta" style="margin:0 0 6px;color:var(--bad)">' + r.errs.slice(0, 3).map(h).join('; ') + '</div>');
+    }).join('') + '</div>';
+    if (res.lineErrs.length) o += '<div class="note bad"><b>Dòng bỏ qua:</b><br>' + res.lineErrs.map(h).join('<br>') + '</div>';
+    (res.notes || []).forEach((n) => { o += '<div class="note warn">' + h(n) + '</div>'; });
+    o += good.length ? '<button class="btn big" data-act="bulkgo">Nhập ' + good.length + ' mã đề</button>' : '<div class="note bad">Không có mã nào hợp lệ để nhập.</div>';
+    return o + backBtn('Hủy');
+  }
+  function applyBulk() {
+    const c = bulkCtx; if (!c) return false;
+    const plan = c.plan, cfgT = ST.cfg('T'), tT = ST.tab('T');
+    if (plan.setCfg) {   // C2-3: đổi cấu hình tab T theo bảng; mã cũ sẽ hết hợp lệ thì hỏi MỘT lần
+      const okT = plan.rows.filter((r) => r.ok && r.tab === 'T').map((r) => r.made);
+      const nc = Object.assign({}, cfgT, plan.setCfg);
+      const others = Object.keys(tT.keys).filter((m) => okT.indexOf(m) < 0 && SC.validateKey(nc, tT.keys[m]).length);
+      if (others.length && !root.confirm('Đổi số câu tab Phiếu tự chọn thành ' + plan.setCfg.n1 + '/' + plan.setCfg.n2 + '/' + plan.setCfg.n3 + ' sẽ làm các mã cũ (' + others.join(', ') + ') không còn hợp lệ cho tới khi nhập lại. Tiếp tục?')) return false;
+      Object.assign(cfgT, plan.setCfg);
+    }
+    const before = {}; ['B', 'T'].forEach((id) => { before[id] = ST.rows(id).filter((x) => x.noKey).map((x) => x.id); });
+    const added = [], bad = c.res.lineErrs.slice();
+    plan.rows.forEach((r) => {
+      if (!r.ok) { bad.push('Mã đề ' + r.made + ': ' + r.errs.join('; ')); return; }
+      const errs = SC.validateKey(ST.cfg(r.tab), r.key);
+      if (errs.length) { bad.push('Mã đề ' + r.made + ': ' + errs.join(' ')); return; }
+      ST.tab(r.tab).keys[r.made] = r.key; added.push(r.key);
+    });
+    ST.save(true); bulkCtx = null;
+    let nowScored = 0;
+    ['B', 'T'].forEach((id) => { const was = before[id]; nowScored += ST.rows(id).filter((x) => !x.noKey && was.indexOf(x.id) >= 0).length; });
+    const sum = 'Đã nạp ' + added.length + ' mã' + (added.length ? ' (' + added.map((k) => k.made).join(', ') + ')' : '') + (bad.length ? ', bỏ ' + bad.length + ' dòng lỗi' : '') + (nowScored ? '. Đã tính điểm ' + nowScored + ' bài chờ đáp án' : '') + '.';
+    if (parked) {
+      const got = added.some((k) => k.tab === parked.tabId && k.made === parked.made);
+      if (got) { restoreParked(); toast(sum, 4500); return true; }
+      openModal('Kết quả nạp đáp án', '<div class="note ' + (added.length ? 'warn' : 'bad') + '">' + h(sum) + '<br>Chưa có đáp án <b>mã ' + h(parked.made) + '</b> của bài đang chấm.</div>' + (bad.length ? '<div class="note bad">' + bad.map(h).join('<br>') + '</div>' : '') + backBtn(), 'keyback');
+      return added.length > 0;
+    }
+    if (added.length) { S.tab = added[0].tab; S.view = 'keys'; ST.save(true); }
+    if (added.length === 1 && !bad.length) { closeModal(); render(); toast('Đã nhập đáp án mã đề ' + added[0].made + ' (' + TABNAME[added[0].tab] + ')' + (nowScored ? '. Đã tính điểm ' + nowScored + ' bài chờ đáp án' : '')); return true; }
+    render();
+    openModal('Kết quả nạp đáp án', '<div class="note ' + (bad.length ? 'warn' : 'ok') + '">' + h(sum) + '</div>' + (bad.length ? '<div class="note bad"><b>Lý do bỏ:</b><br>' + bad.map(h).join('<br>') + '</div>' : '') + backBtn());
+    return added.length > 0;
+  }
+  const importKeyText = importKeysText;
+  /** A1: mở hộp nhập đáp án cho mã đề còn thiếu, giữ nguyên bài đang chấm. */
+  function openKeyFor() {
+    parked = draft;
+    const m = parked.made;
+    openModal('Nhập đáp án mã ' + m, '<div class="note info">Bài đang chấm được giữ nguyên. Nạp xong đáp án <b>mã ' + h(m) + '</b> app tự quay lại và tính điểm.</div>' +
+      '<div class="grid2"><button class="btn primary" data-act="qrcam">📷 Quét QR</button><label class="btn" for="fileQr">🖼️ QR từ ảnh</label></div>' +
+      '<label class="f">Hoặc dán chuỗi CP1… / đường dẫn #k=… / bảng từ Excel (được nhiều dòng)</label><textarea id="kPaste" placeholder="CP1;' + h(parked.tabId) + ';' + h(m) + ';…"></textarea>' +
+      '<div class="grid2" style="margin-top:12px"><button class="btn primary" data-act="pastego">Nạp</button><label class="btn" for="fileKeys">📑 Tệp bảng đáp án</label></div>' +
+      '<button class="btn" data-act="keyback">↩ Quay lại bài đang chấm</button>', 'keyback');
+    draft = null;
+  }
+  function restoreParked() {
+    if (!parked) return;
+    draft = parked; parked = null;
+    openModal(draft.isNew ? 'Kết quả phiếu' : 'Bài đã chấm', cardHtml(draft));
+    drawOverlay(draft); loadThumb(draft);
   }
   function decodeQrFile(file) {
     busy('Đang đọc mã QR…');
@@ -13094,21 +13259,33 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     switch (a) {
       case 'tab': S.tab = v.v; ST.save(); render(); break;
       case 'view': S.view = v.v; ST.save(); render(); root.scrollTo(0, 0); break;
-      case 'close': closeModal(); render(); break;
+      case 'close': if (parked) { restoreParked(); break; } closeModal(); render(); break;
+      case 'keyfor': openKeyFor(); break;
+      case 'bulkgo': applyBulk(); break;
+      case 'keyback': restoreParked(); break;
+      case 'savewait': saveDraft(false, true); break;
+      case 'savewaitnext': saveDraft(true, true); break;
+      case 'pick': {   // 0.1.2 A2
+        if (v.kind === 'room') { draft.mode = 'sbd'; draft.sbd = R.digits(v.sbd); draft.stt = null; }
+        else { draft.mode = 'stt'; draft.stt = parseInt(v.stt, 10); draft.lop = v.lop || draft.lop; draft.sbd = ''; }
+        draft.fixed.sbd = 1; draft.name = '';
+        refreshCard(); break;
+      }
       case 'scan-new': retryFor = null; break;
       case 'live': retryFor = null; openLive(); break;
       case 'qrcam': openQrCam(); break;
       case 'manual': openModal('Nhập đáp án tay', keyEditorHtml(null)); break;
-      case 'paste': openModal('Dán mã đáp án', '<label class="f">Dán chuỗi CP1… hoặc đường dẫn có #k=…</label><textarea id="kPaste" placeholder="CP1;B;0101;…"></textarea><div style="margin-top:12px"><button class="btn primary" data-act="pastego">Nhập</button></div>'); break;
-      case 'bulkgo': applyBulk(); break;
-      case 'pastego': importKeyText($('#kPaste').value); break;
+      case 'paste': openModal('Dán mã đáp án', '<label class="f">Dán chuỗi CP1… hoặc đường dẫn có #k=… (NHIỀU dòng được, mỗi mã một dòng), hoặc dán cả bảng đáp án chép từ Excel/Word</label><textarea id="kPaste" placeholder="CP1;B;0101;…"></textarea><div style="margin-top:12px"><button class="btn primary" data-act="pastego">Nhập</button></div>'); break;
+      case 'pastego': importKeysText($('#kPaste').value); break;
       case 'keyedit': openModal('Đáp án mã đề ' + v.m, keyEditorHtml(ST.tab().keys[v.m])); break;
       case 'keydel': if (root.confirm('Xóa đáp án mã đề ' + v.m + '?')) { delete ST.tab().keys[v.m]; ST.save(true); render(); } break;
       case 'keysave': {
         const f = parseKeyForm();
         if (f.rest) { toast('Phần II: số ký tự Đ/S phải chia hết cho 4.', 3500); return; }
         if (!(S.tab === 'B' ? /^\d{4}$/ : /^\d{3}$/).test(f.key.made)) { toast('Mã đề phải có ' + (S.tab === 'B' ? 4 : 3) + ' chữ số.', 3500); return; }
-        if (addKey(f.key)) { closeModal(); render(); toast('Đã lưu đáp án mã đề ' + f.key.made); }
+        const res = addKey(f.key);
+        if (res === true) { S.tab = f.key.tab; S.view = 'keys'; ST.save(true); closeModal(); render(); toast('Đã lưu đáp án mã đề ' + f.key.made); }
+        else openModal('Đáp án chưa hợp lệ', '<div class="note bad">' + res.map(h).join('<br>') + '</div><button class="btn" data-act="close">Đóng</button>');
         break;
       }
       case 'open': {
@@ -13122,7 +13299,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         else { const o = ['', 'D', 'S'], i = +v.i; draft.ans.p2[q][i] = o[(o.indexOf(draft.ans.p2[q][i]) + 1) % o.length]; draft.fixed['p2-' + (q * 4 + i)] = 1; }
         refreshCard(); break;
       }
-      case 'confirmflags': { (draft.flags || []).forEach((f) => { if (f.severity !== 'info') draft.fixed[flagKey(f)] = 1; }); refreshCard(); toast('Đã xác nhận các ô cờ.', 2500); break; }
+      case 'confirmflags': { (draft.flags || []).forEach((f) => { if (f.severity === 'warn') draft.fixed[flagKey(f)] = 1; }); refreshCard(); toast('Đã xác nhận các ô cờ vàng.', 2500); break; }   // 0.1.2 A4: cờ đỏ không xác nhận được
       case 'setmode': { draft.mode = v.v; if (v.v === 'stt' && !draft.lop) draft.lop = tab().activeLop || ''; draft.fixed.sbd = 1; refreshCard(); break; }
       case 'usesbd': { draft.mode = 'sbd'; draft.sbd = v.v; draft.fixed.sbd = 1; refreshCard(); break; }
       case 'setname': { draft.name = ($('#nm').value || '').trim(); refreshCard(); break; }
@@ -13186,6 +13363,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       r.tl = n; ST.save(true); el.value = String(n).replace('.', ','); return;
     }
     if (!draft) return;
+    if (a === 'cardp2') {   // 0.1.2 B3: đổi cách tính Phần II cho cả tab T, thẻ tính lại ngay
+      const cfg = ST.cfg('T'); cfg.p2Mode = el.value === 'ymenh' ? 'ymenh' : 'bo'; ST.save(true); refreshCard();
+      toast('Phần II: ' + (cfg.p2Mode === 'bo' ? 'thang Bộ' : fmt(cfg.p2PtYmenh) + 'đ/ý') + ' — áp dụng cho mọi bài của tab này.', 3500); return;
+    }
     if (a === 'sbd') { draft.sbd = el.value.replace(/\D/g, ''); if (draft.mode === 'none') draft.mode = 'sbd'; draft.fixed.sbd = 1; refreshCard(); }
     else if (a === 'stt') { const n = parseInt(el.value, 10); draft.stt = isNaN(n) ? null : n; draft.fixed.sbd = 1; refreshCard(); }
     else if (a === 'dlop') { draft.lop = el.value; refreshCard(); }
@@ -13200,12 +13381,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
       act(el.dataset.act, el);
     });
-    doc.addEventListener('change', (e) => { const el = e.target; if (el.dataset && el.dataset.act && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) onChange(el); });
+    doc.addEventListener('change', (e) => { const el = e.target; if (el.dataset && el.dataset.act && el.dataset.act !== 'pickq' && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) onChange(el); });
+    doc.addEventListener('input', (e) => { const el = e.target; if (el.dataset && el.dataset.act === 'pickq') filterPicker(el.value); });
+    $('#fileKeys').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importKeyFile(f); });
     $('#fileCam').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) processFile(f, 'file'); });
     $('#filePick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) processFile(f, 'file'); });
     $('#fileQr').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) decodeQrFile(f); });
     $('#fileRoster').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importRosterFile(f); });
-    $('#fileKeyTable').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importKeyTableFile(f); });
     $('#fileFill').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) handleFillFile(f); });
     $('#fileJson').addEventListener('change', (e) => {
       const f = e.target.files[0]; e.target.value = ''; if (!f) return;
@@ -13224,7 +13406,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     S = ST.load();
     wire();
     render();
-    root.CP_TEST = { processCanvas, ST, get draft() { return draft; }, render, importKeyText, openModal };
+    root.CP_TEST = { processCanvas, ST, get draft() { return draft; }, get parked() { return parked; }, render, importKeyText, importKeysText, openModal };
   }
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', init); else init();
 })(typeof window !== 'undefined' ? window : globalThis);
