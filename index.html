@@ -11184,6 +11184,75 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (typeof module !== 'undefined' && module.exports) module.exports = CP;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
+/* ==== 46_qrmulti.js ==== */
+/* CHẤM TRẮC NGHIỆM — quét NHIỀU mã QR trong một ảnh (tờ in cả bộ đáp án, ảnh chụp màn hình có nhiều mã).
+ * jsQR chỉ đọc một mã, và thấy nhiều mã cùng lúc thì thường không đọc được cái nào; ở đây quét cả ảnh, rồi chia ô chồng lấn, mỗi lần đọc được thì xóa trắng mã đó và quét tiếp. */
+(function (root) {
+  'use strict';
+  const CP = (root.CP = root.CP || {});
+  const Q = (CP.qrmulti = {});
+  const jsQR = () => root.jsQR || (typeof require !== 'undefined' ? require('jsqr') : null);
+
+  function crop(data, w, x0, y0, cw, ch) {
+    const out = new Uint8ClampedArray(cw * ch * 4);
+    for (let y = 0; y < ch; y++) out.set(data.subarray(((y0 + y) * w + x0) * 4, ((y0 + y) * w + x0 + cw) * 4), y * cw * 4);
+    return out;
+  }
+  function whiten(data, w, h, loc, pad) {
+    const xs = [loc.topLeftCorner, loc.topRightCorner, loc.bottomLeftCorner, loc.bottomRightCorner].map((p) => p.x), ys = [loc.topLeftCorner, loc.topRightCorner, loc.bottomLeftCorner, loc.bottomRightCorner].map((p) => p.y);
+    const x0 = Math.max(0, Math.floor(Math.min.apply(null, xs) - pad)), x1 = Math.min(w - 1, Math.ceil(Math.max.apply(null, xs) + pad));
+    const y0 = Math.max(0, Math.floor(Math.min.apply(null, ys) - pad)), y1 = Math.min(h - 1, Math.ceil(Math.max.apply(null, ys) + pad));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = (y * w + x) * 4; data[i] = data[i + 1] = data[i + 2] = 255; data[i + 3] = 255; }
+  }
+
+  /** Cắt cửa sổ và thu nhỏ nguyên số lần (lấy mẫu) để jsQR chạy nhanh. Trả {px, w, h, f}. */
+  function windowOf(work, W, x0, y0, cw, ch) {
+    const f = Math.max(1, Math.ceil(Math.max(cw, ch) / 1000)), w = Math.floor(cw / f), h = Math.floor(ch / f), out = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = ((y0 + y * f) * W + (x0 + x * f)) * 4, o = (y * w + x) * 4; out[o] = work[i]; out[o + 1] = work[i + 1]; out[o + 2] = work[i + 2]; out[o + 3] = 255; }
+    return { px: out, w, h, f };
+  }
+
+  /** data: RGBA, w, h. Trả mảng chuỗi duy nhất (trên→dưới, trái→phải). opts: {max=40, ms=15000}.
+   *  Cách làm: quét cả ảnh; rồi trượt cửa sổ 1/2, 1/3, 1/4 cạnh ảnh (bước nửa cửa sổ). Mã nào đọc được thì xóa trắng ngay để cửa sổ sau không bị nhiễu. */
+  Q.scanAll = function (data, w, h, opts) {
+    opts = opts || {}; const max = opts.max || 40, deadline = Date.now() + (opts.ms || 15000), J = jsQR(), found = new Map();
+    const work = new Uint8ClampedArray(data);
+    const take = (code, ox, oy, f) => {
+      const m = (p) => ({ x: ox + p.x * f, y: oy + p.y * f }), L = code.location;
+      const loc = { topLeftCorner: m(L.topLeftCorner), topRightCorner: m(L.topRightCorner), bottomLeftCorner: m(L.bottomLeftCorner), bottomRightCorner: m(L.bottomRightCorner) };
+      if (!found.has(code.data)) found.set(code.data, { text: code.data, x: loc.topLeftCorner.x, y: loc.topLeftCorner.y });
+      whiten(work, w, h, loc, 10 * f);
+    };
+    const whole = windowOf(work, w, 0, 0, w, h);
+    for (let i = 0; i < 5 && Date.now() < deadline; i++) { const c = J(whole.px, whole.w, whole.h, { inversionAttempts: 'attemptBoth' }); if (!c) break; take(c, 0, 0, whole.f); const nw = windowOf(work, w, 0, 0, w, h); whole.px = nw.px; }
+    for (let round = 0; round < 2; round++) {
+      const before = found.size;
+      for (const n of [2, 3, 4]) {
+        const cw = Math.round(w / n), ch = Math.round(h / n), sx = Math.round(cw / 2), sy = Math.round(ch / 2);
+        for (let y0 = 0; y0 + ch <= h + 1; y0 += sy) for (let x0 = 0; x0 + cw <= w + 1; x0 += sx) {
+          if (found.size >= max || Date.now() > deadline) break;
+          const xx = Math.min(x0, w - cw), yy = Math.min(y0, h - ch), win = windowOf(work, w, xx, yy, cw, ch);
+          const code = J(win.px, win.w, win.h, { inversionAttempts: 'attemptBoth' }); if (code) take(code, xx, yy, win.f);
+        }
+      }
+      if (found.size === before) break;
+    }
+    return [...found.values()].sort((a, b) => (Math.round(a.y / 200) - Math.round(b.y / 200)) || (a.x - b.x)).map((v) => v.text);
+  };
+
+  /** Bản NHANH cho camera trực tiếp (mỗi khung hình): cả khung + cửa sổ 1/2 bước 1/4. Không lặp xóa mã. Trả mảng chuỗi duy nhất. */
+  Q.scanFrame = function (data, w, h) {
+    const J = jsQR(), got = new Map();
+    const tryWin = (x0, y0, cw, ch) => { const win = windowOf(data, w, x0, y0, cw, ch); const c = J(win.px, win.w, win.h, { inversionAttempts: 'dontInvert' }); if (c && c.data) got.set(c.data, 1); };
+    tryWin(0, 0, w, h);
+    const cw = Math.round(w / 2), ch = Math.round(h / 2);
+    for (let y = 0; y + ch <= h + 1; y += Math.round(ch / 2)) for (let x = 0; x + cw <= w + 1; x += Math.round(cw / 2)) tryWin(Math.min(x, w - cw), Math.min(y, h - ch), cw, ch);
+    return [...got.keys()];
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = CP;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
 /* ==== 50_store.js ==== */
 /* CHẤM TRẮC NGHIỆM — lưu trữ (M7): trạng thái 2 tab, danh sách học sinh (nhiều danh sách), đáp án, kết quả, hàng đợi phiếu lỗi, thống kê chụp; CSV; sao lưu JSON.
  * Lưu bằng localStorage (try/catch); Safari có thể xoá dữ liệu trang -> luôn khuyến nghị xuất JSON sau mỗi lần nhập.
@@ -12264,6 +12333,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const small = document.createElement('canvas');
     const sctx = small.getContext('2d', { willReadFrequently: true });
     let stable = 0, last = null, done = false, timer = null, cooldown = 0;
+    const seen = new Set();
 
     function grab(maxSide) {
       const vw = video.videoWidth, vh = video.videoHeight;
@@ -12287,6 +12357,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function tick() {
       if (done || !video.videoWidth || video.readyState < 2) return;
       if (o.mode === 'qr') {
+        if (o.continuous && CP.qrmulti) {   // 0.1.2d C3-3: quét liên tục, nhiều mã mỗi khung, báo mỗi mã MỚI một lần
+          const fr = grab(1000);
+          CP.qrmulti.scanFrame(fr.data, fr.width, fr.height).forEach((t) => { if (!seen.has(t)) { seen.add(t); o.onQR(t); } });
+          if (!seen.size) o.onHint('Đưa mã QR đáp án vào khung (quét được nhiều mã: từng mã hoặc cả tờ)', 'info');
+          return;
+        }
         const id = grab(800);
         const code = root.jsQR ? root.jsQR(id.data, id.width, id.height, { inversionAttempts: 'attemptBoth' }) : null;
         if (code && code.data) { done = true; stop(); o.onQR(code.data); }
@@ -12310,7 +12386,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         o.onCapture(fullCanvas());
       } else o.onHint('Giữ yên máy…', 'ok');
     }
-    timer = setInterval(tick, o.mode === 'qr' ? 180 : 320);
+    timer = setInterval(tick, o.mode === 'qr' ? (o.continuous ? 250 : 180) : 320);
     return { stop, capture: function () { const c = fullCanvas(); stop(); return c; } };
   };
 
@@ -12809,17 +12885,32 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       toast('Không mở được camera (' + (e && e.name ? e.name : 'lỗi') + '). Dùng nút Chụp phiếu thay thế.', 5000);
     }
   }
+  /** 0.1.2d C3-3: camera QR quét LIÊN TỤC: mỗi mã mới cộng dồn ("Đã quét N mã: 666, 667…"), mã đã gặp bỏ qua.
+   *  "Xong" hoặc "Đóng" (khi đã có mã) -> đưa tất cả vào đường nhập chung; chỉ một mã đơn giản thì nhập ngay như cũ. */
   async function openQrCam() {
     const box = doc.createElement('div'); box.className = 'cam'; box.id = 'cam';
-    box.innerHTML = '<video id="vid" playsinline muted></video><div class="frame"></div><div class="bar" id="camHint">Đang mở camera…</div><div class="foot"><button class="btn danger" id="camX">Đóng</button></div>';
+    box.innerHTML = '<video id="vid" playsinline muted></video><div class="frame"></div><div class="bar" id="camHint">Đang mở camera…</div><div class="foot"><button class="btn primary" id="camDone" hidden>Xong</button><button class="btn danger" id="camX">Đóng</button></div>';
     doc.body.appendChild(box);
+    const got = [], mades = [];
+    let other = 0;
     const stopAll = () => { if (cam) { cam.stop(); cam = null; } box.remove(); };
-    $('#camX').onclick = stopAll;
+    const finish = () => { stopAll(); if (got.length) importKeysText(got.join('\n'), 'camera (' + got.length + ' mã QR)'); };
+    const hint = (t, lv) => { const b = $('#camHint'); if (b) { b.textContent = t; b.className = 'bar ' + (lv || ''); } };
+    $('#camX').onclick = finish;
+    $('#camDone').onclick = finish;
     try {
       cam = await CP.camera.open($('#vid'), {
-        mode: 'qr',
-        onHint: (t, lv) => { const b = $('#camHint'); if (b) { b.textContent = t; b.className = 'bar ' + (lv || ''); } },
-        onQR: (text) => { cam = null; box.remove(); importKeyText(text); },
+        mode: 'qr', continuous: true,
+        onHint: (t, lv) => { if (!got.length) hint(t, lv); },
+        onQR: (text) => {
+          if (!String(text).trim() || got.indexOf(text) >= 0) return;
+          got.push(text);
+          const ks = K.decodeMany(text).keys;
+          if (!ks.length) other++;
+          ks.forEach((k) => { if (mades.indexOf(k.made) < 0) mades.push(k.made); });
+          hint('Đã quét ' + mades.length + ' mã: ' + mades.join(', ') + (other ? ' (' + other + ' mã QR không phải đáp án)' : '') + '. Quét tiếp hoặc bấm Xong.', 'ok');
+          const d = $('#camDone'); if (d) d.hidden = false;
+        },
       });
     } catch (e) { stopAll(); toast('Không mở được camera (' + (e && e.name ? e.name : 'lỗi') + '). Dùng "QR từ ảnh" hoặc dán mã.', 5000); }
   }
@@ -12950,14 +13041,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     openModal(draft.isNew ? 'Kết quả phiếu' : 'Bài đã chấm', cardHtml(draft));
     drawOverlay(draft); loadThumb(draft);
   }
+  /** 0.1.2d C3-2: "QR từ ảnh" đọc MỌI mã QR trong ảnh (tờ in cả bộ, ảnh chụp màn hình nhiều mã) bằng CP.qrmulti.scanAll,
+   *  gom thành một chuỗi xuống dòng rồi đưa vào đường nhập chung (một mã đơn giản: nhập ngay; nhiều mã: hộp xem trước).
+   *  C3-5: ảnh thu về cạnh dài ≤ QR_MAX_SIDE; tổng thời gian đọc ≤ QR_MS.
+   *  Lưới cửa sổ của scanAll cố định theo cỡ ảnh nên ở vài cỡ một mã nằm vắt qua ranh giới bị sót (đo: 11/18 cỡ đọc đủ 4/4).
+   *  Quét thêm lần 2 ở 0,8 lần cỡ (lưới lệch đi) rồi gộp: 18/18 cỡ đọc đủ, 0 mã sai. Mỗi chuỗi vẫn phải qua CRC khi nhập. */
+  const QR_MAX_SIDE = 3600, QR_MS = 15000, QR_PASS2 = 0.8;
   function decodeQrFile(file) {
-    busy('Đang đọc mã QR…');
-    loadImage(file).then((img) => {
-      const best = [2000, 1200, 800].map((m) => fit(img, m));
-      let code = null;
-      for (let i = 0; i < best.length && !code; i++) { const c = best[i], id = c.getContext('2d').getImageData(0, 0, c.width, c.height); code = root.jsQR(id.data, id.width, id.height, { inversionAttempts: 'attemptBoth' }); }
+    busy('Đang đọc mã QR… (tờ nhiều mã mất vài giây)');
+    loadImage(file).then(async (img) => {
+      await tick();
+      const t0 = Date.now(), list = [];
+      const pass = (side, ms) => {
+        const c = fit(img, side), id = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+        CP.qrmulti.scanAll(id.data, id.width, id.height, { ms: Math.max(500, ms) }).forEach((t) => { if (String(t).trim() && list.indexOf(t) < 0) list.push(t); });   // jsQR đôi khi trả chuỗi rỗng: bỏ
+        return c;
+      };
+      const c = pass(QR_MAX_SIDE, QR_MS * 0.6);
+      const n1 = list.length;
+      if (Date.now() - t0 < QR_MS - 1000) pass(Math.round(Math.max(c.width, c.height) * QR_PASS2), QR_MS - (Date.now() - t0));
+      root.__qrLast = { n: list.length, n1, ms: Date.now() - t0, w: c.width, h: c.height };   // số liệu cho kiểm thử
       unbusy();
-      if (code && code.data) importKeyText(code.data); else toast('Không thấy mã QR trong ảnh.', 3500);
+      if (!list.length) { toast('Không thấy mã QR trong ảnh.' + (Date.now() - t0 >= QR_MS ? ' Ảnh quá lớn hoặc mờ: chụp gần hơn từng phần.' : ''), 4000); return; }
+      importKeysText(list.join('\n'), 'ảnh QR (' + list.length + ' mã QR)');
     }).catch((e) => { unbusy(); toast('Không mở được ảnh: ' + e.message, 3500); });
   }
   function keyEditorHtml(key) {
