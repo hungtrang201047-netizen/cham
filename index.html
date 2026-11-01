@@ -11086,9 +11086,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     else if (r.mode === 'sbd') hit = R.findBySbd(lists, r.sbd);
     if (!hit) return { found: false, name: '', lop: r.lop || '' };
     if (hit.ambiguous) return { found: true, ambiguous: true, name: '', lop: '' };
-    return { found: true, name: hit.row.name, lop: hit.row.lop || (hit.list.kind === 'class' ? hit.list.name : '') || r.lop || '' };
+    return { found: true, name: R.properName(hit.row.name), lop: hit.row.lop || (hit.list.kind === 'class' ? hit.list.name : '') || r.lop || '' };
   };
-  ST.nameOf = function (tabId, r) { return r.name || ST.lookup(tabId, r).name || ''; };
+  ST.nameOf = function (tabId, r) { return r.name ? CP.roster.properName(r.name) : ST.lookup(tabId, r).name || ''; };
   ST.lopOf = function (tabId, r) { return r.lop || ST.lookup(tabId, r).lop || ''; };
   ST.idLabel = (r) => (r.mode === 'stt' ? 'STT ' + r.stt : r.sbd);
 
@@ -11136,7 +11136,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   };
   ST.missing = function (tabId) {
     const t = ST.tab(tabId);
-    return CP.roster.missing(t.lists, t.results, null);
+    return CP.roster.missing(t.lists, t.results, null).map((m) => Object.assign({}, m, { name: CP.roster.properName(m.name) }));
   };
 
   ST.csv = function (tabId) {
@@ -11179,6 +11179,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   const nfc = (s) => String(s == null ? '' : s).replace(/ /g, ' ').normalize('NFC').replace(/\s+/g, ' ').trim();
   const fold = (s) => nfc(s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
   R.nfc = nfc; R.fold = fold;
+  /** Viết hoa chữ cái đầu mỗi từ của họ tên (chỉ chạm vào từ đang viết thường toàn bộ). Dùng khi HIỂN THỊ/XUẤT; khóa ghép dùng fold nên không đổi. */
+  R.properName = (s) => nfc(String(s == null ? '' : s)).replace(/(^|\s)(\p{Ll})/gu, (m, a, b) => a + b.toLocaleUpperCase('vi'));
   R.digits = (s) => String(s == null ? '' : s).replace(/\D/g, '');
   R.sbdKey = (s) => { const d = R.digits(s).replace(/^0+/, ''); return d === '' && R.digits(s) !== '' ? '0' : d; };
   R.newId = () => 'ls' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
