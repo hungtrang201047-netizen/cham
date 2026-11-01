@@ -108,6 +108,7 @@ select.inl{width:auto;max-width:9em;padding:4px 6px}
 .p3row input{min-height:40px}
 .list .item{padding:9px 12px}
 .btn.big[data-act="live"]{min-height:48px;font-size:16px;font-weight:600}
+.btn[data-act="xlsx"]{background:#0d9488;color:#fff;min-height:54px;font-size:16px;font-weight:700}
 </style>
 </head>
 <body>
@@ -11782,6 +11783,74 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (typeof module !== 'undefined' && module.exports) module.exports = CP;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
+/* ==== 62_xlsx.js ==== */
+/* CHẤM TRẮC NGHIỆM — xuất bảng điểm .xlsx (M13b): JSZip + XML tự viết, chạy trong trình duyệt.
+ * Cột "Tự luận" để TRỐNG cho thầy tự nhập; cột "Tổng" là công thức = trắc nghiệm + tự luận. Điểm giữ nguyên giá trị, không làm tròn. */
+(function (root) {
+  'use strict';
+  const CP = (root.CP = root.CP || {});
+  const U = CP.util;
+  const X = (CP.xlsx = {});
+  const getZip = () => root.JSZip || (typeof require !== 'undefined' ? require('jszip') : null);
+  const colL = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
+  const str = (ref, s, st) => '<c r="' + ref + '" t="inlineStr"' + (st ? ' s="' + st + '"' : '') + '><is><t xml:space="preserve">' + U.esc(s) + '</t></is></c>';
+  const num = (ref, n, st) => '<c r="' + ref + '"' + (st ? ' s="' + st + '"' : '') + '><v>' + String(U.r4(n)) + '</v></c>';
+
+  /** data: {title, subtitle:[...], withTL:bool, rows:[{ten,lop,id,made,p1,p2,p3,tn,note,review}]} -> Promise<Uint8Array> */
+  X.build = async function (data) {
+    const withTL = !!data.withTL;
+    const head = ['STT', 'Họ và tên', 'Lớp', 'SBD / STT lớp', 'Mã đề', 'Phần 1', 'Phần 2', 'Phần 3', withTL ? 'Trắc nghiệm' : 'Tổng'].concat(withTL ? ['Tự luận (nhập tay)', 'Tổng'] : []).concat(['Ghi chú']);
+    const nC = head.length, HR = 4; // hàng tiêu đề
+    const rowsXml = [];
+    rowsXml.push('<row r="1">' + str('A1', data.title || 'KẾT QUẢ CHẤM TRẮC NGHIỆM', 1) + '</row>');
+    rowsXml.push('<row r="2">' + str('A2', (data.subtitle || []).join(' — '), 0) + '</row>');
+    rowsXml.push('<row r="' + HR + '" ht="32" customHeight="1">' + head.map((h, i) => str(colL(i + 1) + HR, h, 2)).join('') + '</row>');
+    data.rows.forEach((r, i) => {
+      const n = HR + 1 + i, c = [];
+      const s = r.review ? 4 : 0;
+      c.push(num('A' + n, i + 1, 3), str('B' + n, r.ten || '', s), str('C' + n, r.lop || '', s), str('D' + n, r.id || '', 3), str('E' + n, r.made || '', 3), num('F' + n, r.p1, 3), num('G' + n, r.p2, 3), num('H' + n, r.p3, 3));
+      if (withTL) {
+        c.push('<c r="I' + n + '" s="5"><f>F' + n + '+G' + n + '+H' + n + '</f><v>' + String(U.r4(r.tn)) + '</v></c>');
+        c.push('<c r="J' + n + '" s="6"/>');
+        c.push('<c r="K' + n + '" s="5"><f>I' + n + '+J' + n + '</f><v>' + String(U.r4(r.tn)) + '</v></c>');
+        c.push(str('L' + n, r.note || '', s));
+      } else {
+        c.push('<c r="I' + n + '" s="5"><f>F' + n + '+G' + n + '+H' + n + '</f><v>' + String(U.r4(r.tn)) + '</v></c>');
+        c.push(str('J' + n, r.note || '', s));
+      }
+      rowsXml.push('<row r="' + n + '">' + c.join('') + '</row>');
+    });
+    const last = HR + data.rows.length;
+    const widths = withTL ? [6, 28, 8, 14, 8, 9, 9, 9, 13, 16, 9, 16] : [6, 28, 8, 14, 8, 9, 9, 9, 9, 16];
+    const sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="' + HR + '" topLeftCell="A' + (HR + 1) + '" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="18"/><cols>' +
+      widths.map((w, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + w + '" customWidth="1"/>').join('') + '</cols><sheetData>' + rowsXml.join('') + '</sheetData>' +
+      '<autoFilter ref="A' + HR + ':' + colL(nC) + (last > HR ? last : HR) + '"/></worksheet>';
+    const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<fonts count="3"><font><sz val="12"/><name val="Times New Roman"/></font><font><b/><sz val="14"/><name val="Times New Roman"/></font><font><b/><sz val="12"/><name val="Times New Roman"/></font></fonts>' +
+      '<fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDCE6F7"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8F5E9"/></patternFill></fill></fills>' +
+      '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF999999"/></left><right style="thin"><color rgb="FF999999"/></right><top style="thin"><color rgb="FF999999"/></top><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border></borders>' +
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="7">' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>' +
+      '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+      '<xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>' +
+      '<xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0" applyFill="1" applyBorder="1"/>' +
+      '<xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>' +
+      '<xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>' +
+      '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+    const zip = new (getZip())();
+    zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>');
+    zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
+    zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Bảng điểm" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">\'Bảng điểm\'!$A$' + HR + ':$' + colL(nC) + '$' + (last > HR ? last : HR) + '</definedName></definedNames><calcPr fullCalcOnLoad="1"/></workbook>');
+    zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+    zip.file('xl/styles.xml', styles);
+    zip.file('xl/worksheets/sheet1.xml', sheet);
+    return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = CP;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
 /* ==== 65_fill.js ==== */
 /* CHẤM TRẮC NGHIỆM — điền điểm vào tệp danh sách có sẵn của thầy (M7b):
  *  - Word (.docx) danh sách phòng thi: điền cột "Điểm" theo SBD.
@@ -12185,6 +12254,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const miss = ST.missing(S.tab).length;
     let o = '<h2>Kết quả — ' + TABNAME[S.tab] + '</h2>';
     o += '<div class="stat"><div><b>' + rows.length + '</b><small>bài</small></div><div><b>' + (good.length ? fmt(st.mean) : '—') + '</b><small>TB</small></div><div><b>' + (good.length ? fmt(st.max) : '—') + '</b><small>cao nhất</small></div><div><b>' + (good.length ? fmt(st.min) : '—') + '</b><small>thấp nhất</small></div></div>';
+    o += '<button class="btn" data-act="xlsx"' + (rows.length ? '' : ' disabled') + '>📗 Xuất bảng điểm .xlsx (tự luận để trống)</button>';
     o += '<button class="btn primary" data-act="docx"' + (rows.length ? '' : ' disabled') + '>📄 Xuất kết quả .docx</button>';
     o += '<div class="grid2"><button class="btn" data-act="fill-docx"' + (rows.length ? '' : ' disabled') + '>📝 Điền điểm vào DS phòng thi (.docx)</button><button class="btn" data-act="fill-xlsx"' + (rows.length ? '' : ' disabled') + '>📊 Điền điểm vào sổ điểm (.xlsx)</button></div>';
     o += '<div class="grid2"><button class="btn" data-act="csv"' + (rows.length ? '' : ' disabled') + '>CSV (Excel)</button><button class="btn" data-act="backup">💾 Sao lưu JSON</button></div>';
@@ -12667,6 +12737,22 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function docxOptionsHtml() {
     return '<div class="card"><div class="chk"><input type="checkbox" id="oPerQ"><span>Thêm bảng tỉ lệ làm đúng từng câu</span></div><div class="chk"><input type="checkbox" id="oDetail"><span>Thêm phiếu chi tiết từng học sinh (mỗi em một trang)</span></div></div><button class="btn primary big" data-act="docxgo">Tạo tệp .docx</button><button class="btn" data-act="close">Hủy</button>';
   }
+  async function buildXlsxFile() {
+    const tabId = S.tab, cfg = ST.cfg(tabId), t = ST.tab(tabId), mp = SC.maxPoints(cfg);
+    const rows = ST.rows(tabId).filter((r) => !r.noKey);
+    const none = ST.rows(tabId).length - rows.length;
+    busy('Đang tạo bảng điểm…');
+    try {
+      const withTL = tabId === 'T';
+      const sub = [t.info.kyThi && ('Kỳ thi: ' + t.info.kyThi), t.info.mon && ('Môn: ' + t.info.mon), t.info.lop && ('Lớp ' + t.info.lop), t.info.ngay && ('Ngày thi: ' + t.info.ngay), TABNAME[tabId], 'Trắc nghiệm tối đa ' + fmt(tabId === 'T' ? mp.tn : mp.tn)].filter(Boolean);
+      const bytes = await CP.xlsx.build({ title: 'KẾT QUẢ CHẤM TRẮC NGHIỆM', subtitle: sub, withTL, rows: rows.map((r) => ({ ten: r.ten, lop: r.lop, id: r.idLabel, made: r.made, p1: r.p1, p2: r.p2, p3: r.p3, tn: r.p1 + r.p2 + r.p3, review: r.status === 'review', note: r.status === 'manual' ? 'chấm tay' : r.status === 'review' ? 'cần duyệt (chưa xác nhận cờ)' : '' })) });
+      unbusy();
+      const rep = '<div class="note ok"><b>' + rows.length + ' bài</b> trong bảng điểm.' + (withTL ? ' Cột <b>Tự luận</b> để trống, thầy nhập trong Excel; cột Tổng tự cộng.' : '') + '</div>' +
+        (none ? '<div class="note warn">' + none + ' bài chưa có đáp án nên không đưa vào bảng.</div>' : '') +
+        (rows.some((r) => r.status === 'review') ? '<div class="note warn">Dòng tô vàng là bài còn <b>cần duyệt</b>: chưa phải điểm chính thức.</div>' : '');
+      offerFile(fname('xlsx').replace('Ket-qua-cham', 'Bang-diem'), new Blob([bytes], { type: MIME_XLSX }), MIME_XLSX, rep);
+    } catch (e) { unbusy(); toast('Không tạo được bảng điểm: ' + e.message, 5000); }
+  }
   async function buildDocx(perQ, detail) {
     const tabId = S.tab, cfg = ST.cfg(tabId), t = ST.tab(tabId), mp = SC.maxPoints(cfg), rows = ST.rows(tabId);
     const hasTL = tabId === 'T' && (cfg.tlMax > 0 || rows.some((r) => r.tl > 0));
@@ -12887,6 +12973,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       case 'fill-docx': openFill('docx'); break;
       case 'fill-xlsx': openFill('xlsx'); break;
       case 'fillgo': doFillXlsx(); break;
+      case 'xlsx': buildXlsxFile(); break;
       case 'csv': offerFile(fname('csv'), new Blob([ST.csv(S.tab)], { type: 'text/csv;charset=utf-8' }), 'text/csv'); break;
       case 'backup': offerFile(fname('json').replace('Ket-qua-cham', 'Sao-luu-cham'), new Blob([ST.exportJson()], { type: 'application/json' }), 'application/json'); break;
       case 'sharefile': shareFile(); break;
