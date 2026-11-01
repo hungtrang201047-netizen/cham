@@ -12669,8 +12669,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   /* ---- điền điểm vào tệp danh sách ---- */
   const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-  function scoredRows() { return ST.rows(S.tab).filter((r) => !r.noKey && r.status !== 'review'); }
+  const needTL = () => S.tab === 'T' && ST.cfg('T').tlMax > 0;
+  function scoredRows() { return ST.rows(S.tab).filter((r) => !r.noKey && r.status !== 'review' && !(needTL() && r.tl == null)); }
   function reviewCount() { return ST.rows(S.tab).filter((r) => !r.noKey && r.status === 'review').length; }
+  function noTlCount() { return needTL() ? ST.rows(S.tab).filter((r) => !r.noKey && r.status !== 'review' && r.tl == null).length : 0; }
   function openFill(kind) {
     const n = scoredRows().length;
     if (!n) { toast(reviewCount() ? 'Chưa có bài nào điểm chính thức: ' + reviewCount() + ' bài còn cờ chưa duyệt.' : 'Chưa có bài nào đã tính điểm để điền.', 4500); return; }
@@ -12678,7 +12680,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const desc = kind === 'docx'
       ? 'Chọn <b>danh sách phòng thi (.docx)</b> có các cột "Số báo danh", "Họ và tên", "Điểm". App điền cột Điểm theo số báo danh, lưu thành <b>bản sao</b> (tệp gốc không đổi). Chỉ các bài chấm theo SBD được điền.'
       : 'Chọn <b>sổ điểm (.xlsx)</b> có cột "Số TT", "Họ và tên" và "ĐĐG GK/CK". App điền điểm theo STT trong lớp (bài chấm theo SBD thì ghép theo họ tên), lưu thành <b>bản sao</b>. Điểm giữ nguyên, không làm tròn.';
-    openModal(kind === 'docx' ? 'Điền điểm vào danh sách phòng thi' : 'Điền điểm vào sổ điểm', '<div class="note info">' + desc + '</div><div class="meta">Số bài điền được (điểm chính thức): <b>' + n + '</b></div>' + (reviewCount() ? '<div class="note warn">' + reviewCount() + ' bài còn cờ chưa duyệt sẽ <b>không được điền</b>. Vào Kết quả, mở bài đó, đối chiếu ảnh rồi xác nhận.</div>' : '') + '<label class="btn primary big" for="fileFill">📂 Chọn tệp ' + (kind === 'docx' ? '.docx' : '.xlsx') + '</label>');
+    openModal(kind === 'docx' ? 'Điền điểm vào danh sách phòng thi' : 'Điền điểm vào sổ điểm', '<div class="note info">' + desc + '</div><div class="meta">Số bài điền được (điểm chính thức): <b>' + n + '</b></div>' + (reviewCount() ? '<div class="note warn">' + reviewCount() + ' bài còn cờ chưa duyệt sẽ <b>không được điền</b>. Vào Kết quả, mở bài đó, đối chiếu ảnh rồi xác nhận.</div>' : '') + (noTlCount() ? '<div class="note warn">' + noTlCount() + ' bài <b>chưa nhập điểm tự luận</b> nên chưa được điền (tránh điền thiếu điểm). Mở bài đó, nhập điểm tự luận rồi lưu.</div>' : '') + '<label class="btn primary big" for="fileFill">📂 Chọn tệp ' + (kind === 'docx' ? '.docx' : '.xlsx') + '</label>');
     $('#fileFill').setAttribute('accept', kind === 'docx' ? '.docx' : '.xlsx');
   }
   async function handleFillFile(file) {
