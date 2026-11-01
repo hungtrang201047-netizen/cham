@@ -11267,7 +11267,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   function newTab(id) {
     return { info: { kyThi: '', mon: id === 'B' ? 'Vật lí' : '', lop: '', ngay: '' }, cfg: id === 'T' ? CP.scoring.defaultConfigT() : null,
-      keys: {}, lists: [], activeLop: '', results: [], pending: [], stats: { ok: 0, review: 0, manual: 0, retry: 0, reasons: {} } };
+      keys: {}, lists: [], activeLop: '', results: [], pending: [], stats: { ok: 0, review: 0, manual: 0, retry: 0, reasons: {} },
+      lopMade: {}, resLop: '' };   // 0.1.3 C4: lớp -> các mã đề của lớp; bộ lọc lớp ở màn Kết quả (dữ liệu cũ thiếu 2 trường này vẫn nạp được)
   }
   ST.fresh = function () { return { v: 2, tab: 'B', view: 'scan', tabs: { B: newTab('B'), T: newTab('T') } }; };
 
@@ -11281,6 +11282,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       t.results.forEach((r) => { if (!r.mode) { r.mode = 'sbd'; r.lop = r.lop || ''; r.stt = r.stt == null ? null : r.stt; } if (!r.status) r.status = 'ok'; });
       t.stats = Object.assign({ ok: 0, review: 0, manual: 0, retry: 0, reasons: {} }, t.stats || {});
+      if (!t.lopMade || typeof t.lopMade !== 'object' || Array.isArray(t.lopMade)) t.lopMade = {};
+      if (typeof t.resLop !== 'string') t.resLop = '';
     }
     s.tabs.T.cfg = Object.assign(CP.scoring.defaultConfigT(), s.tabs.T.cfg || {});
     s.v = 2;
@@ -11354,6 +11357,38 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   ST.lopOf = function (tabId, r) { return r.lop || ST.lookup(tabId, r).lop || ''; };
   ST.idLabel = (r) => (r.mode === 'stt' ? 'STT ' + r.stt : r.sbd);
 
+  /* ---------- 0.1.3 C4: mã đề theo lớp (đáp án vẫn theo MÃ ĐỀ; đây chỉ là kiểm "mã này có phát cho lớp này không") ---------- */
+  /** Mọi tên lớp của tab: tên danh sách lớp + cột Lớp của danh sách phòng (không trùng, không phân biệt dấu/hoa). */
+  ST.allClasses = function (tabId) {
+    const R = CP.roster, seen = {}, out = [];
+    const add = (s) => { s = String(s || '').trim(); if (s && !seen[R.fold(s)]) { seen[R.fold(s)] = 1; out.push(s); } };
+    ST.lists(tabId).forEach((l) => { if (l.kind === 'class') add(l.name); else l.rows.forEach((r) => add(r.lop)); });
+    Object.keys(ST.tab(tabId).lopMade || {}).forEach(add);
+    return out.sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
+  };
+  ST.madesOf = function (tabId, lop) {
+    const R = CP.roster, m = ST.tab(tabId).lopMade || {}, f = R.fold(lop || '');
+    const k = Object.keys(m).find((x) => R.fold(x) === f);
+    return k ? (m[k] || []).slice() : [];
+  };
+  ST.setMades = function (tabId, lop, made) {
+    const R = CP.roster, t = ST.tab(tabId), f = R.fold(lop || '');
+    Object.keys(t.lopMade).forEach((x) => { if (R.fold(x) === f) delete t.lopMade[x]; });
+    const list = [...new Set((made || []).map(String))].sort();
+    if (list.length) t.lopMade[lop] = list;
+    ST.save(true);
+  };
+  ST.madeOkKey = (lop, made) => CP.roster.fold(lop || '') + ':' + made;
+  /** Cờ ĐỎ "mã đề không thuộc lớp": null nếu không có vấn đề (lớp chưa gán mã, không rõ lớp, mã thuộc lớp, hoặc thầy đã xác nhận). */
+  ST.madeErr = function (tabId, r) {
+    const lop = ST.lopOf(tabId, r);
+    if (!lop || !/^\d+$/.test(String(r.made || ''))) return null;
+    const ms = ST.madesOf(tabId, lop);
+    if (!ms.length || ms.indexOf(String(r.made)) >= 0) return null;
+    if (r.madeOk && r.madeOk === ST.madeOkKey(lop, r.made)) return null;
+    return 'Mã đề ' + r.made + ' không thuộc lớp ' + lop + ' (lớp này: ' + ms.join(', ') + ')';
+  };
+
   /** Tính điểm cho một kết quả: {key, sc, tong, max, keyErr}. */
   ST.evaluate = function (tabId, r) {
     const cfg = ST.cfg(tabId), tab = ST.tab(tabId);
@@ -11395,8 +11430,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const t = ST.tab(tabId);
     const list = t.results.slice().sort((a, b) => { const x = ST.sortKey(a), y = ST.sortKey(b); return x < y ? -1 : x > y ? 1 : 0; });
     return list.map((r) => {
-      const ev = ST.evaluate(tabId, r);
-      return { id: r.id, mode: r.mode, ten: ST.nameOf(tabId, r), lop: ST.lopOf(tabId, r), sbd: r.sbd, stt: r.stt, idLabel: ST.idLabel(r), made: r.made, ev, status: r.status || 'ok',
+      const ev = ST.evaluate(tabId, r), madeErr = ST.madeErr(tabId, r);
+      // 0.1.3 C4: mã không thuộc lớp -> "cần duyệt" (tính lúc đọc: đổi gán mã là cập nhật ngay, không cần chấm lại)
+      return { id: r.id, mode: r.mode, ten: ST.nameOf(tabId, r), lop: ST.lopOf(tabId, r), sbd: r.sbd, stt: r.stt, idLabel: ST.idLabel(r), made: r.made, ev, madeErr, status: madeErr ? 'review' : r.status || 'ok',
         p1: ev.sc ? ev.sc.p1.pts : 0, p2: ev.sc ? ev.sc.p2.pts : 0, p3: ev.sc ? ev.sc.p3.pts : 0,
         tl: tabId === 'T' ? (r.tl == null ? null : r.tl) : null, tong: ev.tong == null ? 0 : ev.tong, sc: ev.sc, noKey: !ev.sc, ansErr: !!ev.ansErr, flags: r.flags || [], raw: r };
     });
@@ -11406,14 +11442,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return CP.roster.missing(t.lists, t.results, null).map((m) => Object.assign({}, m, { name: CP.roster.properName(m.name) }));
   };
 
-  ST.csv = function (tabId) {
-    const cfg = ST.cfg(tabId), rows = ST.rows(tabId), hasTL = tabId === 'T' && (cfg.tlMax > 0 || rows.some((r) => r.tl > 0));
+  /** Hàng của một lớp (lop rỗng = tất cả). */
+  ST.rowsOfLop = function (tabId, lop) {
+    const f = CP.roster.fold(lop || '');
+    return ST.rows(tabId).filter((r) => !f || CP.roster.fold(r.lop || '') === f);
+  };
+  ST.csv = function (tabId, lop) {
+    const cfg = ST.cfg(tabId), rows = ST.rowsOfLop(tabId, lop), hasTL = tabId === 'T' && (cfg.tlMax > 0 || rows.some((r) => r.tl > 0));
     const q = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
     const head = ['STT', 'Họ và tên', 'Lớp', 'SBD/STT lớp', 'Mã đề', 'Phần 1', 'Phần 2', 'Phần 3'].concat(hasTL ? ['Tự luận'] : []).concat(['Tổng', 'Ghi chú']);
     const lines = [head.map(q).join(';')];
     rows.forEach((r, i) => {
       const f = (n) => U.fmt(n, 4);
-      const note = r.ev.ansErr ? 'sai số câu so với cấu hình' : r.noKey ? 'chờ đáp án' : r.status === 'manual' ? 'chấm tay' : r.status === 'review' ? 'cần duyệt' : '';
+      const note = r.ev.ansErr ? 'sai số câu so với cấu hình' : r.noKey ? 'chờ đáp án' : r.madeErr ? 'cần duyệt: ' + r.madeErr : r.status === 'manual' ? 'chấm tay' : r.status === 'review' ? 'cần duyệt' : '';
       const g = (n) => (r.noKey ? '' : f(n));   // 0.1.2: bài chưa tính điểm không ghi 0
       const cells = [i + 1, q(r.ten), q(r.lop), q(r.idLabel), q(r.made), g(r.p1), g(r.p2), g(r.p3)].concat(hasTL ? [r.tl == null ? '' : f(r.tl)] : []).concat([g(r.tong), q(note)]);
       lines.push(cells.join(';'));
@@ -12472,7 +12513,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     o += '<label class="btn primary big" for="fileCam" data-act="scan-new">📷 Chụp phiếu</label>';
     if (CP.camera.supported()) o += '<button class="btn big" data-act="live">🎥 Camera tự chụp</button>';
     o += '<div class="grid2"><label class="btn" for="filePick" data-act="scan-new">🖼️ Chọn ảnh có sẵn</label><button class="btn" data-act="manual-sheet">✍️ Chấm tay một bài</button></div>';
-    const miss = ST.missing(S.tab).length, nrev = t.results.filter((r) => r.status === 'review').length;
+    const miss = ST.missing(S.tab).length, nrev = ST.rows(S.tab).filter((r) => r.status === 'review').length;
     o += '<div class="card"><div class="kv"><span>Mẫu đọc</span><span>' + (S.tab === 'B' ? 'Phiếu 2025, SBD 8 số, mã đề 4 số' : 'Phiếu tự chọn, mã đề 3 số') + '</span></div>' +
       '<div class="kv"><span>Số câu</span><span>P1 ' + cfg.n1 + ' · P2 ' + cfg.n2 + ' · P3 ' + cfg.n3 + '</span></div>' +
       '<div class="kv"><span>Đã chấm</span><span><b>' + t.results.length + '</b> bài' + (nrev ? ' (<span style="color:var(--warn)">' + nrev + ' cần duyệt</span>)' : '') + '</span></div>' +
@@ -12512,12 +12553,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return o;
   }
 
+  /** 0.1.3 C4: lớp đang lọc ở màn Kết quả ('' = tất cả); xuất .xlsx/.docx/CSV theo đúng bộ lọc này. */
+  const resLop = () => { const v = tab().resLop || ''; return v && ST.allClasses(S.tab).some((c) => R.fold(c) === R.fold(v)) ? v : ''; };
   function viewResults() {
-    const rows = ST.rows(S.tab), cfg = ST.cfg(), good = rows.filter((r) => !r.noKey);
+    const lopF = resLop(), rows = ST.rowsOfLop(S.tab, lopF), cfg = ST.cfg(), good = rows.filter((r) => !r.noKey);
     const mp = SC.maxPoints(cfg);
     const st = SC.summarize(good.map((r) => ({ tong: r.tong, tongMax: S.tab === 'T' ? mp.total : mp.tn })));
     const miss = ST.missing(S.tab).length;
     let o = '<h2>Kết quả — ' + TABNAME[S.tab] + '</h2>';
+    const cls = ST.allClasses(S.tab);
+    if (cls.length > 1) {
+      o += '<div class="row" style="align-items:center;margin:0 0 8px"><span class="meta" style="margin:0;flex:0 0 auto">Lớp:</span><select class="inl" data-act="resLop" style="flex:1;max-width:none"><option value="">Tất cả các lớp</option>' +
+        cls.map((c) => '<option' + (R.fold(c) === R.fold(lopF) ? ' selected' : '') + '>' + h(c) + '</option>').join('') + '</select></div>';
+      if (lopF) o += '<div class="note info" style="margin:0 0 8px">Đang lọc lớp <b>' + h(lopF) + '</b>: danh sách và tệp xuất (.xlsx, .docx, CSV) chỉ gồm lớp này.</div>';
+    }
     o += '<div class="stat"><div><b>' + rows.length + '</b><small>bài</small></div><div><b>' + (good.length ? fmt(st.mean) : '—') + '</b><small>TB</small></div><div><b>' + (good.length ? fmt(st.max) : '—') + '</b><small>cao nhất</small></div><div><b>' + (good.length ? fmt(st.min) : '—') + '</b><small>thấp nhất</small></div></div>';
     o += '<button class="btn" data-act="xlsx"' + (rows.length ? '' : ' disabled') + '>📗 Xuất bảng điểm .xlsx (tự luận để trống)</button>';
     o += '<button class="btn primary" data-act="docx"' + (rows.length ? '' : ' disabled') + '>📄 Xuất kết quả .docx</button>';
@@ -12535,8 +12584,27 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     });
     o += '</div>';
     if (!rows.length) o += '<div class="note info">Chưa có bài nào. Sang mục Quét.</div>';
-    if (rows.length) o += '<button class="btn danger" data-act="wipe">Xóa tất cả kết quả của tab này</button>';
+    if (ST.rows(S.tab).length) o += '<button class="btn danger" data-act="wipe">Xóa tất cả kết quả của tab này</button>';
     return o;
+  }
+
+  /** 0.1.3 C4: bảng "Lớp → các mã đề" (mỗi tab). Lớp chưa gán = không kiểm. Nút nhỏ. */
+  function lopMadeHtml() {
+    const cls = ST.allClasses(S.tab);
+    let o = '<h3>Mã đề theo lớp</h3><div class="card">';
+    if (!cls.length) return o + '<div class="meta" style="margin:0">Nhập danh sách học sinh trước, rồi gán mã đề cho từng lớp (không bắt buộc).</div></div>';
+    cls.forEach((c) => {
+      const ms = ST.madesOf(S.tab, c);
+      o += '<div class="kv"><span><b>' + h(c) + '</b>: ' + (ms.length ? h(ms.join(', ')) : '<span style="color:var(--mut)">chưa gán (không kiểm)</span>') + '</span><span><button class="btn small" style="display:inline-flex;margin:0" data-act="lopmade" data-lop="' + h(c) + '">Gán mã</button></span></div>';
+    });
+    return o + '<div class="meta" style="margin:6px 0 0;font-size:13px">Bài của lớp đã gán mà mã đề KHÔNG thuộc lớp: cờ đỏ, "cần duyệt", không điền vào Word/Excel cho tới khi thầy sửa hoặc xác nhận. Đáp án vẫn theo mã đề.</div></div>';
+  }
+  function lopMadeEditHtml(lop) {
+    const codes = [...new Set(Object.keys(tab().keys).concat(ST.madesOf(S.tab, lop)))].sort(), cur = ST.madesOf(S.tab, lop);
+    if (!codes.length) return '<div class="note warn">Chưa có đáp án mã đề nào. Nhập đáp án trước, rồi gán mã cho lớp.</div><button class="btn small" data-act="close">Đóng</button>';
+    return '<div class="note info">Chọn các mã đề phát cho lớp <b>' + h(lop) + '</b>. Bỏ chọn hết = lớp không kiểm mã.</div><div class="card">' +
+      codes.map((m) => '<div class="chk"><input type="checkbox" class="lmchk" value="' + h(m) + '"' + (cur.indexOf(m) >= 0 ? ' checked' : '') + '><span>Mã đề ' + h(m) + (tab().keys[m] ? '' : ' <small style="color:var(--warn)">(chưa có đáp án)</small>') + '</span></div>').join('') + '</div>' +
+      '<div class="grid2"><button class="btn small" data-act="lopmadesave" data-lop="' + h(lop) + '">Lưu</button><button class="btn small" data-act="close">Hủy</button></div>';
   }
 
   function viewSettings() {
@@ -12559,13 +12627,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       o += '<div class="note info" style="margin:10px 0 0">Điểm tối đa: P1 ' + fmt(mp.p1) + ' · P2 ' + fmt(mp.p2) + ' · P3 ' + fmt(mp.p3) + ' · Tự luận ' + fmt(mp.tl) + ' · <b>Tổng ' + fmt(mp.total) + '</b></div>';
     }
     o += '</div>';
+    o += lopMadeHtml();
     o += '<h3>Danh sách học sinh</h3><div class="card"><div class="kv"><span>Danh sách đã nhập</span><span><b>' + nl + '</b> (' + n + ' học sinh)</span></div>' +
       '<button class="btn" style="margin-top:10px" data-act="roster">👥 Quản lý danh sách (.xlsx, .docx, dán)</button>' +
       '<div class="meta" style="margin:4px 0 0;font-size:13px">Danh sách chỉ nằm trên máy này, không gửi đi đâu. Đừng đưa danh sách lên kho GitHub công khai.</div></div>';
     o += '<h3>Thống kê chụp</h3><div class="card"><div class="kv"><span>Đạt ngay</span><span>' + (stt.ok || 0) + '</span></div><div class="kv"><span>Cần duyệt</span><span>' + (stt.review || 0) + '</span></div><div class="kv"><span>Chấm tay</span><span>' + (stt.manual || 0) + '</span></div><div class="kv"><span>Không đọc được (chụp lại)</span><span>' + (stt.retry || 0) + '</span></div>' +
       Object.keys(stt.reasons || {}).map((k) => '<div class="kv"><span>— ' + h(k) + '</span><span>' + stt.reasons[k] + '</span></div>').join('') + '</div>';
     o += '<h3>Dữ liệu</h3><div class="grid2"><button class="btn" data-act="backup">💾 Sao lưu JSON</button><label class="btn" for="fileJson">♻️ Khôi phục</label></div>';
-    o += '<div class="foot-note">Chấm trắc nghiệm · bản 0.1.2 · © thầy Lê Hùng — THPT Bắc Sơn<br>Dữ liệu chỉ lưu trên máy này, không gửi đi đâu.</div>';
+    o += '<div class="foot-note">Chấm trắc nghiệm · bản 0.1.3 · © thầy Lê Hùng — THPT Bắc Sơn<br>Dữ liệu chỉ lưu trên máy này, không gửi đi đâu.</div>';
     return o;
   }
 
@@ -12757,11 +12826,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     else if (!ev.key) pills.push('<span class="pill err">Mã đề ' + h(d.made) + ' chưa có đáp án</span>');
     else if (ev.keyErr && ev.keyErr.length) pills.push('<span class="pill err">' + h(ev.keyErr[0]) + '</span>');
     if (ev.ansErr) pills.push('<span class="pill err">' + h(ev.ansErr[0]) + '</span>');
+    const mErr = ST.madeErr(tabId, d);   // 0.1.3 C4
+    if (mErr) pills.push('<span class="pill err">' + h(mErr) + '</span>');
     const nFaint = unresolved.filter((f) => f.type === 'faint').length;
     if (nFaint >= 4) pills.unshift('<span class="pill err">⚠ Ảnh có ' + nFaint + ' ô tô mờ: có thể thiếu sáng hoặc nhòe. Nên CHỤP LẠI trước khi lưu (ô tô đậm có thể bị bỏ sót).</span>');
     unresolved.forEach((f) => pills.push('<span class="pill' + (f.severity === 'error' ? ' err' : '') + '">' + h(f.text) + '</span>'));
     if (pills.length) o += '<div style="margin-top:12px">' + pills.join('') + '</div>';
     const uWarn = unresolved.filter((f) => f.severity === 'warn'), uErr = unresolved.filter((f) => f.severity === 'error');
+    if (mErr) o += '<div class="note bad" style="margin-top:10px">Bài này sẽ là <b>cần duyệt</b> (không điền vào Word/Excel). Sửa mã đề hoặc lớp nếu đọc sai; nếu em này đúng là làm mã ' + h(d.made) + ' thì xác nhận.</div><button class="btn small" data-act="madeok" style="width:100%">Xác nhận: mã ' + h(d.made) + ' đúng là của em này</button>';
     if (uErr.length) o += '<div class="note bad" style="margin-top:10px">Cờ đỏ phải <b>sửa thật</b> mới lưu được: nhập lại số báo danh/STT hoặc chạm tên học sinh, nhập lại mã đề' + (uErr.some((f) => f.field === 'sheet') ? '; lỗi của cả tờ phiếu: chụp lại hoặc chấm tay' : '') + '.</div>';
     if (uWarn.length && !d.manual) o += '<div class="note warn" style="margin-top:10px">Điểm chỉ <b>chính thức</b> khi các ô có cờ vàng đã được thầy đối chiếu với tờ giấy (mở "Ảnh đối chiếu"). Sửa ô sai bằng cách chạm vào ô, hoặc bấm xác nhận nếu app đã đọc đúng.</div><button class="btn small" data-act="confirmflags" style="width:100%">✔ Tôi đã đối chiếu: các ô cờ vàng đúng như app đọc</button>';
     o += '</div>';
@@ -12848,7 +12920,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const ev0 = ST.evaluate(tabId, d);
     if (ev0.ansErr && d.isNew) { toast(ev0.ansErr[0], 5000); return; }
     if (needsKey(d, ev0) && d.isNew && !wait) { toast('Mã đề ' + d.made + ' chưa có đáp án: bấm "Nhập đáp án mã ' + d.made + '" hoặc "Lưu chờ đáp án".', 5000); return; }
-    const rec = { id: d.id, ts: d.ts, mode: d.mode, sbd: d.mode === 'sbd' ? d.sbd : '', stt: d.mode === 'stt' ? d.stt : null, lop: d.mode === 'stt' ? d.lop : '', made: d.made, layout: d.layout, ans: d.ans, tl: d.tl, name: d.name || '', flags: d.flags, fixed: d.fixed };
+    const rec = { id: d.id, ts: d.ts, mode: d.mode, sbd: d.mode === 'sbd' ? d.sbd : '', stt: d.mode === 'stt' ? d.stt : null, lop: d.mode === 'stt' ? d.lop : '', made: d.made, layout: d.layout, ans: d.ans, tl: d.tl, name: d.name || '', flags: d.flags, fixed: d.fixed, madeOk: d.madeOk || '' };
     const k = ST.identKey(rec);
     const dup = t.results.find((r) => ST.identKey(r) === k && r.id !== d.id);
     if (dup && !root.confirm((d.mode === 'stt' ? 'STT ' + d.stt + ' lớp ' + d.lop : 'SBD ' + d.sbd) + ' đã có bài chấm. Thay thế bài cũ?')) return;
@@ -12979,9 +13051,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function bulkHtml(plan, res, src) {
     const good = plan.rows.filter((r) => r.ok), bad = plan.rows.filter((r) => !r.ok);
     let o = '<div class="note info">Nguồn: <b>' + h(src) + '</b>. Đọc được <b>' + plan.rows.length + '</b> mã đề: <b>' + good.length + '</b> hợp lệ' + (bad.length ? ', <b>' + bad.length + '</b> lỗi (không nhập)' : '') + (res.lineErrs.length ? ', <b>' + res.lineErrs.length + '</b> dòng không đọc được' : '') + '.</div>';
+    const thay = plan.rows.filter((r) => r.ok && ST.tab(r.tab).keys[r.made] && !sameKey(ST.tab(r.tab).keys[r.made], r.key)).map((r) => r.made);
+    if (thay.length) o += '<div class="note warn">Bấm Nhập <b>sẽ THAY đáp án ' + thay.length + ' mã đã có: ' + h(thay.join(', ')) + '</b> (đáp án theo mã đề, mọi lớp dùng mã này đều đổi theo).</div>';
     if (plan.setCfg) o += '<div class="note warn">Cấu hình sẽ đổi thành <b>P1 ' + plan.setCfg.n1 + ' · P2 ' + plan.setCfg.n2 + ' · P3 ' + plan.setCfg.n3 + '</b> (tab Phiếu tự chọn) cho khớp bảng.</div>';
     o += '<div class="card">' + plan.rows.map((r) => {
-      const old = ST.tab(r.tab).keys[r.made], had = old ? (sameKey(old, r.key) ? ' · <small>đã có, giống hệt</small>' : ' · <small style="color:var(--warn)">thay mã cũ</small>') : '';
+      const old = ST.tab(r.tab).keys[r.made], had = old ? (sameKey(old, r.key) ? ' · <small>đã có, giống hệt</small>' : ' · <b style="color:var(--warn)">sẽ THAY mã ' + h(r.made) + '</b>') : '';
       return '<div class="kv"><span><b style="font-size:18px">' + h(r.made) + '</b> · ' + (r.tab === 'B' ? 'Bộ GD' : 'Tự chọn') + ' · P1 ' + r.key.p1.length + ' P2 ' + r.key.p2.length + ' P3 ' + r.key.p3.length + had + '</span><span style="color:' + (r.ok ? 'var(--ok)' : 'var(--bad)') + ';font-weight:700">' + (r.ok ? '✓' : 'lỗi') + '</span></div>' + (r.ok ? '' : '<div class="meta" style="margin:0 0 6px;color:var(--bad)">' + r.errs.slice(0, 3).map(h).join('; ') + '</div>');
     }).join('') + '</div>';
     if (res.lineErrs.length) o += '<div class="note bad"><b>Dòng bỏ qua:</b><br>' + res.lineErrs.map(h).join('<br>') + '</div>';
@@ -13163,7 +13237,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function fname(ext) {
     const t = tab(), d = new Date();
     const slug = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    return ['Ket-qua-cham', slug(t.info.mon), slug(t.info.lop), d.getFullYear() + '-' + U.pad(d.getMonth() + 1, 2) + '-' + U.pad(d.getDate(), 2)].filter(Boolean).join('_') + '.' + ext;
+    return ['Ket-qua-cham', slug(t.info.mon), slug(resLop() || t.info.lop), d.getFullYear() + '-' + U.pad(d.getMonth() + 1, 2) + '-' + U.pad(d.getDate(), 2)].filter(Boolean).join('_') + '.' + ext;
   }
   function offerFile(name, blob, mime, extra) {
     const file = (typeof File !== 'undefined') ? new File([blob], name, { type: mime }) : null;
@@ -13191,8 +13265,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
   async function buildXlsxFile() {
     const tabId = S.tab, cfg = ST.cfg(tabId), t = ST.tab(tabId), mp = SC.maxPoints(cfg);
-    const rows = ST.rows(tabId).filter((r) => !r.noKey);
-    const none = ST.rows(tabId).length - rows.length;
+    const all = ST.rowsOfLop(tabId, resLop()), rows = all.filter((r) => !r.noKey);   // 0.1.3 C4: theo lớp đang lọc
+    const none = all.length - rows.length;
     busy('Đang tạo bảng điểm…');
     try {
       const withTL = tabId === 'T';
@@ -13206,7 +13280,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     } catch (e) { unbusy(); toast('Không tạo được bảng điểm: ' + e.message, 5000); }
   }
   async function buildDocx(perQ, detail) {
-    const tabId = S.tab, cfg = ST.cfg(tabId), t = ST.tab(tabId), mp = SC.maxPoints(cfg), rows = ST.rows(tabId);
+    const lopF = resLop(), tabId = S.tab, cfg = ST.cfg(tabId), t = ST.tab(tabId), mp = SC.maxPoints(cfg), rows = ST.rowsOfLop(tabId, lopF);   // 0.1.3 C4
     const hasTL = tabId === 'T' && (cfg.tlMax > 0 || rows.some((r) => r.tl > 0));
     const good = rows.filter((r) => !r.noKey);
     const flagged = [];
@@ -13216,13 +13290,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (r.status === 'manual') txt.push('Chấm tay');
       const fx = r.raw.fixed || {};
       r.flags.filter((f) => f.severity !== 'info').forEach((f) => { if (!fx[flagKey(f)]) txt.push(f.text); });
+      if (r.madeErr) txt.push(r.madeErr + ' (cần duyệt)');
       if (!r.ten) txt.push('Chưa có trong danh sách');
       if (txt.length) flagged.push({ ten: r.ten, sbd: r.idLabel, text: txt.join('; ') });
     });
     const info = t.info, sub1 = [info.kyThi ? 'Kỳ thi: ' + info.kyThi : '', info.mon ? 'Môn: ' + info.mon : ''].filter(Boolean).join(' — ');
     const sub2 = [info.lop ? 'Lớp: ' + info.lop : '', info.ngay ? 'Ngày thi: ' + info.ngay : ''].filter(Boolean).join(' — ');
     const totMax = tabId === 'T' ? mp.total : mp.tn;
-    const missing = ST.missing(tabId).map((m) => ({ stt: m.stt, ten: m.name, lop: m.lop, sbd: m.sbd || '' }));
+    const missing = ST.missing(tabId).filter((m) => !lopF || R.fold(m.lop || '') === R.fold(lopF)).map((m) => ({ stt: m.stt, ten: m.name, lop: m.lop, sbd: m.sbd || '' }));
     const data = {
       title: 'KẾT QUẢ CHẤM TRẮC NGHIỆM', subtitle: [sub1, sub2, TABNAME[tabId]].filter(Boolean),
       maxLine: 'Điểm tối đa: Phần 1 ' + fmt(mp.p1) + ' | Phần 2 ' + fmt(mp.p2) + ' | Phần 3 ' + fmt(mp.p3) + (hasTL ? ' | Tự luận ' + fmt(cfg.tlMax) : '') + ' | Tổng ' + fmt(totMax),
@@ -13439,7 +13514,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       case 'fill-xlsx': openFill('xlsx'); break;
       case 'fillgo': doFillXlsx(); break;
       case 'xlsx': buildXlsxFile(); break;
-      case 'csv': offerFile(fname('csv'), new Blob([ST.csv(S.tab)], { type: 'text/csv;charset=utf-8' }), 'text/csv'); break;
+      case 'lopmade': openModal('Mã đề của lớp ' + v.lop, lopMadeEditHtml(v.lop)); break;
+      case 'lopmadesave': {
+        const ms = [...doc.querySelectorAll('#modal .lmchk:checked')].map((x) => x.value);
+        ST.setMades(S.tab, v.lop, ms); closeModal(); render();
+        toast(ms.length ? 'Lớp ' + v.lop + ': mã ' + ms.join(', ') : 'Lớp ' + v.lop + ': bỏ gán mã (không kiểm)', 3000); break;
+      }
+      case 'madeok': { const lop = ST.lopOf(draft.tabId, draft); draft.madeOk = ST.madeOkKey(lop, draft.made); refreshCard(); toast('Đã xác nhận mã ' + draft.made + ' cho em này.', 2500); break; }
+      case 'csv': offerFile(fname('csv'), new Blob([ST.csv(S.tab, resLop())], { type: 'text/csv;charset=utf-8' }), 'text/csv'); break;
       case 'backup': offerFile(fname('json').replace('Ket-qua-cham', 'Sao-luu-cham'), new Blob([ST.exportJson()], { type: 'application/json' }), 'application/json'); break;
       case 'sharefile': shareFile(); break;
       case 'dlfile': downloadFile(); break;
@@ -13452,6 +13534,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const a = el.dataset.act, v = el.dataset;
     if (a === 'info') { ST.tab().info[v.k] = el.value.trim(); ST.save(); return; }
     if (a === 'lop') { ST.tab().activeLop = el.value; ST.save(true); render(); return; }
+    if (a === 'resLop') { ST.tab().resLop = el.value; ST.save(true); render(); return; }
     if (a === 'lname') { const l = ST.tab().lists.find((x) => x.id === v.id); if (l && el.value.trim()) { l.name = el.value.trim(); ST.save(true); render(); } return; }
     if (a === 'cfg') {
       const cfg = ST.cfg('T');
