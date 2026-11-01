@@ -12339,8 +12339,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (!/^\d+$/.test(d.made)) pills.push('<span class="pill err">Mã đề chưa đọc được</span>');
     else if (!ev.key) pills.push('<span class="pill err">Mã đề ' + h(d.made) + ' chưa có đáp án</span>');
     else if (ev.keyErr && ev.keyErr.length) pills.push('<span class="pill err">' + h(ev.keyErr[0]) + '</span>');
+    const nFaint = unresolved.filter((f) => f.type === 'faint').length;
+    if (nFaint >= 4) pills.unshift('<span class="pill err">⚠ Ảnh có ' + nFaint + ' ô tô mờ: có thể thiếu sáng hoặc nhòe. Nên CHỤP LẠI trước khi lưu (ô tô đậm có thể bị bỏ sót).</span>');
     unresolved.forEach((f) => pills.push('<span class="pill' + (f.severity === 'error' ? ' err' : '') + '">' + h(f.text) + '</span>'));
     if (pills.length) o += '<div style="margin-top:12px">' + pills.join('') + '</div>';
+    if (unresolved.length && !d.manual) o += '<div class="note warn" style="margin-top:10px">Điểm chỉ <b>chính thức</b> khi các ô có cờ đã được thầy đối chiếu với tờ giấy (mở "Ảnh đối chiếu"). Sửa ô sai bằng cách chạm vào ô, hoặc bấm xác nhận nếu app đã đọc đúng.</div><button class="btn small" data-act="confirmflags" style="width:100%">✔ Tôi đã đối chiếu: các ô cờ đúng như app đọc</button>';
     o += '</div>';
 
     o += '<details' + (unresolved.length || d.manual ? ' open' : '') + '><summary>Chi tiết đáp án (chạm ô để sửa)</summary>';
@@ -12659,15 +12662,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   /* ---- điền điểm vào tệp danh sách ---- */
   const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-  function scoredRows() { return ST.rows(S.tab).filter((r) => !r.noKey); }
+  function scoredRows() { return ST.rows(S.tab).filter((r) => !r.noKey && r.status !== 'review'); }
+  function reviewCount() { return ST.rows(S.tab).filter((r) => !r.noKey && r.status === 'review').length; }
   function openFill(kind) {
     const n = scoredRows().length;
-    if (!n) { toast('Chưa có bài nào đã tính điểm để điền.', 3500); return; }
+    if (!n) { toast(reviewCount() ? 'Chưa có bài nào điểm chính thức: ' + reviewCount() + ' bài còn cờ chưa duyệt.' : 'Chưa có bài nào đã tính điểm để điền.', 4500); return; }
     fillCtx = { kind };
     const desc = kind === 'docx'
       ? 'Chọn <b>danh sách phòng thi (.docx)</b> có các cột "Số báo danh", "Họ và tên", "Điểm". App điền cột Điểm theo số báo danh, lưu thành <b>bản sao</b> (tệp gốc không đổi). Chỉ các bài chấm theo SBD được điền.'
       : 'Chọn <b>sổ điểm (.xlsx)</b> có cột "Số TT", "Họ và tên" và "ĐĐG GK/CK". App điền điểm theo STT trong lớp (bài chấm theo SBD thì ghép theo họ tên), lưu thành <b>bản sao</b>. Điểm giữ nguyên, không làm tròn.';
-    openModal(kind === 'docx' ? 'Điền điểm vào danh sách phòng thi' : 'Điền điểm vào sổ điểm', '<div class="note info">' + desc + '</div><div class="meta">Số bài đã tính điểm: <b>' + n + '</b></div><label class="btn primary big" for="fileFill">📂 Chọn tệp ' + (kind === 'docx' ? '.docx' : '.xlsx') + '</label>');
+    openModal(kind === 'docx' ? 'Điền điểm vào danh sách phòng thi' : 'Điền điểm vào sổ điểm', '<div class="note info">' + desc + '</div><div class="meta">Số bài điền được (điểm chính thức): <b>' + n + '</b></div>' + (reviewCount() ? '<div class="note warn">' + reviewCount() + ' bài còn cờ chưa duyệt sẽ <b>không được điền</b>. Vào Kết quả, mở bài đó, đối chiếu ảnh rồi xác nhận.</div>' : '') + '<label class="btn primary big" for="fileFill">📂 Chọn tệp ' + (kind === 'docx' ? '.docx' : '.xlsx') + '</label>');
     $('#fileFill').setAttribute('accept', kind === 'docx' ? '.docx' : '.xlsx');
   }
   async function handleFillFile(file) {
@@ -12798,6 +12802,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         else { const o = ['', 'D', 'S'], i = +v.i; draft.ans.p2[q][i] = o[(o.indexOf(draft.ans.p2[q][i]) + 1) % o.length]; draft.fixed['p2-' + (q * 4 + i)] = 1; }
         refreshCard(); break;
       }
+      case 'confirmflags': { (draft.flags || []).forEach((f) => { if (f.severity !== 'info') draft.fixed[flagKey(f)] = 1; }); refreshCard(); toast('Đã xác nhận các ô cờ.', 2500); break; }
       case 'setmode': { draft.mode = v.v; if (v.v === 'stt' && !draft.lop) draft.lop = tab().activeLop || ''; draft.fixed.sbd = 1; refreshCard(); break; }
       case 'usesbd': { draft.mode = 'sbd'; draft.sbd = v.v; draft.fixed.sbd = 1; refreshCard(); break; }
       case 'setname': { draft.name = ($('#nm').value || '').trim(); refreshCard(); break; }
