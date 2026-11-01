@@ -109,6 +109,7 @@ select.inl{width:auto;max-width:9em;padding:4px 6px}
 .list .item{padding:9px 12px}
 .btn.big[data-act="live"]{min-height:48px;font-size:16px;font-weight:600}
 .btn[data-act="xlsx"]{background:#0d9488;color:#fff;min-height:54px;font-size:16px;font-weight:700}
+.btn.go,.btn[data-act="bulkgo"]{background:#16a34a;color:#fff;min-height:56px;font-size:16px;font-weight:700}
 </style>
 </head>
 <body>
@@ -126,6 +127,7 @@ select.inl{width:auto;max-width:9em;padding:4px 6px}
 <input id="fileJson" type="file" accept=".json,application/json" hidden>
 <input id="fileRoster" type="file" accept=".xlsx,.docx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
 <input id="fileFill" type="file" accept=".docx,.xlsx" hidden>
+<input id="fileKeyTable" type="file" accept=".docx,.xlsx,.csv,.txt,text/plain,text/csv" hidden>
 <script>(function webpackUniversalModuleDefinition(root, factory) {
 	if(typeof exports === 'object' && typeof module === 'object')
 		module.exports = factory();
@@ -11016,6 +11018,138 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (typeof module !== 'undefined' && module.exports) module.exports = CP;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
+/* ==== 45_keytable.js ==== */
+/* CHẤM TRẮC NGHIỆM — nhập đáp án HÀNG LOẠT: bảng tổng hợp (Word/Excel/văn bản dán) hoặc nhiều mã CP1/đường dẫn #k=.
+ * Bảng: hàng tiêu đề có "Mã đề" và hàng nhãn câu (1…n = Phần I; 1a…2d = Phần II; 1…m lần nữa = Phần III). Ô Phần II ghi Đ/S, Phần III ghi đáp số.
+ * Kết quả: {keys:[{made,p1,p2,p3,count,errs}], notes:[...]}; app tự chọn tab theo số chữ số mã đề và số câu. */
+(function (root) {
+  'use strict';
+  const CP = (root.CP = root.CP || {});
+  const KT = (CP.keytable = {});
+  const getZip = () => root.JSZip || (typeof require !== 'undefined' ? require('jszip') : null);
+  const nfc = (s) => String(s == null ? '' : s).normalize('NFC').trim();
+  const LBL = /^(\d+)([a-dA-D]?)$/;
+
+  function normP3(s) {
+    return String(s == null ? '' : s).normalize('NFC').replace(/[−–—‒]/g, '-').replace(/\s+/g, '').replace(/\./g, ',');
+  }
+  function normDS(s) {
+    const t = nfc(s).toUpperCase();
+    if (/^(Đ|D|T|ĐÚNG|DUNG|TRUE|1)$/.test(t)) return 'D';
+    if (/^(S|SAI|F|FALSE|0)$/.test(t)) return 'S';
+    return '';
+  }
+
+  /** grid: mảng các hàng, mỗi hàng là mảng chuỗi. */
+  KT.fromGrid = function (grid) {
+    const out = { keys: [], notes: [] };
+    let lr = -1;
+    for (let r = 0; r < grid.length; r++) {
+      const c = (grid[r] || []).slice(1);
+      if (c.filter((x) => LBL.test(nfc(x))).length >= 6) { lr = r; break; }
+    }
+    if (lr < 0) return out;
+    const labels = grid[lr].map(nfc);
+    // phân đoạn theo nhãn
+    const sec = []; let cur = 0, seen2 = false;
+    for (let c = 0; c < labels.length; c++) {
+      const m = LBL.exec(labels[c]);
+      if (!m || c === 0) { sec[c] = 0; continue; }
+      if (m[2]) { cur = 2; seen2 = true; } else if (cur === 0) cur = 1; else if (cur === 2 && seen2) cur = 3;
+      sec[c] = cur;
+    }
+    const col1 = [], col2 = [], col3 = [];
+    labels.forEach((l, c) => { if (sec[c] === 1) col1.push(c); else if (sec[c] === 2) col2.push(c); else if (sec[c] === 3) col3.push(c); });
+    // nhóm Phần II theo số câu
+    const groups = []; const gidx = {};
+    col2.forEach((c) => { const m = LBL.exec(labels[c]); const q = m[1]; if (gidx[q] == null) { gidx[q] = groups.length; groups.push({ q, cols: [] }); } groups[gidx[q]].cols.push({ c, l: m[2].toLowerCase() }); });
+    const seenMade = {};
+    for (let r = lr + 1; r < grid.length; r++) {
+      const row = grid[r] || []; const made = nfc(row[0]).replace(/\s+/g, '');
+      if (!/^\d{3,4}$/.test(made)) continue;
+      const errs = [];
+      let p1 = '';
+      col1.forEach((c, i) => { const a = nfc(row[c]).toUpperCase(); if (/^[ABCD]$/.test(a)) p1 += a; else { p1 += '?'; errs.push('Phần I câu ' + (i + 1) + ': "' + a + '"'); } });
+      const p2 = groups.map((g) => {
+        const byL = {}; g.cols.forEach((x) => { byL[x.l] = normDS(row[x.c]); });
+        let s = '';
+        ['a', 'b', 'c', 'd'].forEach((l) => { const v = byL[l]; if (v) s += v; else { s += '?'; errs.push('Phần II ' + g.q + l + ': ô trống hoặc lạ'); } });
+        return s;
+      });
+      const p3 = col3.map((c, i) => { const a = normP3(row[c]); if (!/^[0-9,\-]{1,4}$/.test(a)) errs.push('Phần III câu ' + (i + 1) + ': "' + a + '"'); return a; });
+      if (seenMade[made] != null) { out.notes.push('Mã ' + made + ' xuất hiện hai lần: lấy dòng sau.'); out.keys[seenMade[made]] = null; }
+      seenMade[made] = out.keys.length;
+      out.keys.push({ made, p1, p2, p3, count: [col1.length, groups.length, col3.length], errs });
+    }
+    out.keys = out.keys.filter(Boolean);
+    return out;
+  };
+
+  KT.fromDocx = async function (buf) {
+    const zip = await getZip().loadAsync(buf);
+    const f = zip.file('word/document.xml'); if (!f) throw new Error('Không phải tệp Word .docx.');
+    const tables = CP.roster._docxTables(await f.async('string'));
+    let best = { keys: [], notes: [] };
+    for (const t of tables) { const r = KT.fromGrid(t.rows.map((row) => row.cells.map((c) => c.text))); if (r.keys.length > best.keys.length) best = r; }
+    return best;
+  };
+  KT.fromXlsx = async function (buf) {
+    const zip = await getZip().loadAsync(buf);
+    const sheets = await CP.roster._xlsxSheets(zip);
+    let best = { keys: [], notes: [] };
+    for (const sh of sheets) {
+      const g = []; let mx = 0;
+      for (const [, cells] of sh.grid.rows) for (const c of cells.keys()) mx = Math.max(mx, c);
+      for (const r of [...sh.grid.rows.keys()].sort((a, b) => a - b)) { const row = []; const cells = sh.grid.rows.get(r); for (let c = 1; c <= mx; c++) row.push(cells.has(c) ? cells.get(c).v : ''); g.push(row); }
+      const r = KT.fromGrid(g); if (r.keys.length > best.keys.length) best = r;
+    }
+    return best;
+  };
+  /** Văn bản dán: nhiều mã CP1/đường dẫn #k=, hoặc bảng dán từ Excel/Word (tab hoặc ; ngăn cột). */
+  KT.fromText = function (text) {
+    const s = String(text == null ? '' : text);
+    const found = s.match(/CP1(?:;|%3B)[^\s"'<>]+/gi) || [];
+    if (found.length) {
+      const out = { keys: [], notes: [], fromCp1: true }; const seen = {};
+      found.forEach((raw) => {
+        const d = CP.keys.decode(raw);
+        if (!d.ok) { out.notes.push('Bỏ một mã CP1: ' + d.error); return; }
+        const k = d.key; if (seen[k.made] != null) out.keys[seen[k.made]] = null;
+        seen[k.made] = out.keys.length;
+        out.keys.push({ made: k.made, p1: k.p1, p2: k.p2, p3: k.p3, count: [k.p1.length, k.p2.length, k.p3.length], errs: [], tab: k.tab });
+      });
+      out.keys = out.keys.filter(Boolean);
+      return out;
+    }
+    const grid = s.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(/\t|;/));
+    const r = KT.fromGrid(grid); r.fromTable = true; return r;
+  };
+
+  /** Chọn tab và kiểm tra từng mã. cfgT = cấu hình tab T hiện tại. Trả {rows:[{made,tab,ok,errs,key}], setCfg:{n1,n2,n3}|null}. */
+  KT.plan = function (res, cfgT, cfgB) {
+    const rows = []; const tCounts = [];
+    res.keys.forEach((k) => {
+      const errs = k.errs.slice(); let tab = k.tab || (k.made.length === 4 ? 'B' : 'T');
+      if (k.made.length === 4 && tab !== 'B') errs.push('Mã 4 chữ số chỉ dùng cho tab Bộ GD');
+      if (k.made.length === 3 && tab !== 'T') errs.push('Mã 3 chữ số chỉ dùng cho tab Phiếu tự chọn');
+      if (tab === 'B' && (k.p1.length !== cfgB.n1 || k.p2.length !== cfgB.n2 || k.p3.length !== cfgB.n3)) errs.push('Tab Bộ GD cần ' + cfgB.n1 + '/' + cfgB.n2 + '/' + cfgB.n3 + ' câu, bảng có ' + k.p1.length + '/' + k.p2.length + '/' + k.p3.length);
+      if (tab === 'T') tCounts.push(k.p1.length + '/' + k.p2.length + '/' + k.p3.length);
+      rows.push({ made: k.made, tab, errs, ok: !errs.length, key: { tab, made: k.made, p1: k.p1, p2: k.p2, p3: k.p3 } });
+    });
+    let setCfg = null;
+    const okT = rows.filter((r) => r.tab === 'T' && r.ok);
+    if (okT.length) {
+      const sig = [...new Set(okT.map((r) => r.key.p1.length + '/' + r.key.p2.length + '/' + r.key.p3.length))];
+      if (sig.length > 1) okT.forEach((r) => { if (r.key.p1.length + '/' + r.key.p2.length + '/' + r.key.p3.length !== sig[0]) { r.ok = false; r.errs.push('Số câu khác các mã còn lại (' + r.key.p1.length + '/' + r.key.p2.length + '/' + r.key.p3.length + ' so với ' + sig[0] + ')'); } });
+      const f = okT.find((r) => r.ok);
+      if (f && (f.key.p1.length !== cfgT.n1 || f.key.p2.length !== cfgT.n2 || f.key.p3.length !== cfgT.n3)) setCfg = { n1: f.key.p1.length, n2: f.key.p2.length, n3: f.key.p3.length };
+    }
+    return { rows, setCfg };
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = CP;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
 /* ==== 50_store.js ==== */
 /* CHẤM TRẮC NGHIỆM — lưu trữ (M7): trạng thái 2 tab, danh sách học sinh (nhiều danh sách), đáp án, kết quả, hàng đợi phiếu lỗi, thống kê chụp; CSV; sao lưu JSON.
  * Lưu bằng localStorage (try/catch); Safari có thể xoá dữ liệu trang -> luôn khuyến nghị xuất JSON sau mỗi lần nhập.
@@ -12233,6 +12367,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function viewKeys() {
     const t = tab(), cfg = ST.cfg(), codes = Object.keys(t.keys).sort();
     let o = '<h2>Đáp án — ' + TABNAME[S.tab] + '</h2>';
+    o += '<label class="btn go" for="fileKeyTable">📑 Nhập bảng tổng hợp đáp án (Word, Excel, .txt): nhiều mã một lần</label>';
     o += '<div class="grid2"><button class="btn primary" data-act="qrcam">📷 Quét QR đáp án</button><label class="btn" for="fileQr">🖼️ QR từ ảnh</label></div>';
     o += '<div class="grid2"><button class="btn" data-act="manual">✍️ Nhập tay</button><button class="btn" data-act="paste">📋 Dán mã / đường dẫn</button></div>';
     o += '<h3>Các mã đề (' + codes.length + ')</h3>';
@@ -12596,7 +12731,53 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     ST.save(true);
     return true;
   }
+  let bulkCtx = null;
+  function bulkHtml(plan, res, src) {
+    const good = plan.rows.filter((r) => r.ok), bad = plan.rows.filter((r) => !r.ok);
+    const t = (tb) => ST.tab(tb).keys;
+    let o = '<div class="note info">Nguồn: <b>' + h(src) + '</b>. Đọc được <b>' + plan.rows.length + '</b> mã đề: <b>' + good.length + '</b> hợp lệ' + (bad.length ? ', <b>' + bad.length + '</b> lỗi (không nhập)' : '') + '.</div>';
+    if (plan.setCfg) o += '<div class="note warn">Cấu hình tab Phiếu tự chọn sẽ đổi thành <b>P1 ' + plan.setCfg.n1 + ' · P2 ' + plan.setCfg.n2 + ' · P3 ' + plan.setCfg.n3 + '</b> câu cho khớp bảng.</div>';
+    o += '<div class="card">' + plan.rows.map((r) => {
+      const had = t(r.tab)[r.made] ? ' · <small>thay mã cũ</small>' : '';
+      return '<div class="kv"><span><b style="font-size:18px">' + h(r.made) + '</b> · ' + (r.tab === 'B' ? 'Bộ GD' : 'Tự chọn') + ' · P1 ' + r.key.p1.length + ' P2 ' + r.key.p2.length + ' P3 ' + r.key.p3.length + had + '</span><span style="color:' + (r.ok ? 'var(--ok)' : 'var(--bad)') + ';font-weight:700">' + (r.ok ? '✓' : 'lỗi') + '</span></div>' + (r.ok ? '' : '<div class="meta" style="margin:0 0 6px;color:var(--bad)">' + r.errs.slice(0, 3).map(h).join('; ') + '</div>');
+    }).join('') + '</div>';
+    (res.notes || []).forEach((n) => { o += '<div class="note warn">' + h(n) + '</div>'; });
+    o += good.length ? '<button class="btn go big" data-act="bulkgo">Nhập ' + good.length + ' mã đề</button>' : '<div class="note bad">Không có mã nào hợp lệ để nhập.</div>';
+    return o + '<button class="btn" data-act="close">Hủy</button>';
+  }
+  function showBulk(res, src) {
+    if (!res.keys.length) { openModal('Không đọc được bảng đáp án', '<div class="note bad">Không thấy bảng có cột "Mã đề" và các cột câu (1…n, 1a…, …). Kiểm tra lại tệp, hoặc dán từng mã CP1.</div><button class="btn" data-act="close">Đóng</button>'); return; }
+    const plan = CP.keytable.plan(res, ST.cfg('T'), SC.CONFIG_B);
+    bulkCtx = { plan };
+    openModal('Nhập bảng đáp án', bulkHtml(plan, res, src));
+  }
+  function applyBulk() {
+    if (!bulkCtx) return; const plan = bulkCtx.plan; const tT = ST.tab('T');
+    if (plan.setCfg) {
+      const others = Object.keys(tT.keys).filter((m) => !plan.rows.some((r) => r.ok && r.tab === 'T' && r.made === m));
+      if (others.length && !root.confirm('Đổi số câu sẽ làm các mã cũ (' + others.join(', ') + ') thành không hợp lệ cho đến khi nhập lại. Tiếp tục?')) return;
+      Object.assign(ST.cfg('T'), plan.setCfg);
+    }
+    let n = 0, firstTab = null;
+    plan.rows.filter((r) => r.ok).forEach((r) => {
+      const errs = SC.validateKey(ST.cfg(r.tab), r.key); if (errs.length) return;
+      ST.tab(r.tab).keys[r.made] = r.key; n++; firstTab = firstTab || r.tab;
+    });
+    if (firstTab) S.tab = firstTab; S.view = 'keys'; ST.save(true); bulkCtx = null; closeModal(); render(); toast('Đã nhập ' + n + ' mã đề', 3500);
+  }
+  async function importKeyTableFile(file) {
+    busy('Đang đọc bảng đáp án…');
+    try {
+      const buf = await file.arrayBuffer(); const name = file.name; let res;
+      if (/\.docx$/i.test(name)) res = await CP.keytable.fromDocx(buf);
+      else if (/\.xlsx$/i.test(name)) res = await CP.keytable.fromXlsx(buf);
+      else res = CP.keytable.fromText(new TextDecoder('utf-8').decode(buf).replace(/^\ufeff/, ''));
+      unbusy(); showBulk(res, name);
+    } catch (e) { unbusy(); toast('Không đọc được tệp: ' + e.message, 5000); }
+  }
   function importKeyText(text) {
+    const multi = CP.keytable.fromText(text);
+    if (multi.keys.length > 1 || (multi.fromTable && multi.keys.length)) { showBulk(multi, 'văn bản dán'); return true; }
     const r = K.decode(text);
     if (!r.ok) { openModal('Không đọc được mã đáp án', '<div class="note bad">' + h(r.error) + '</div><button class="btn" data-act="close">Đóng</button>'); return false; }
     const had = !!ST.tab(r.key.tab).keys[r.key.made];
@@ -12919,6 +13100,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       case 'qrcam': openQrCam(); break;
       case 'manual': openModal('Nhập đáp án tay', keyEditorHtml(null)); break;
       case 'paste': openModal('Dán mã đáp án', '<label class="f">Dán chuỗi CP1… hoặc đường dẫn có #k=…</label><textarea id="kPaste" placeholder="CP1;B;0101;…"></textarea><div style="margin-top:12px"><button class="btn primary" data-act="pastego">Nhập</button></div>'); break;
+      case 'bulkgo': applyBulk(); break;
       case 'pastego': importKeyText($('#kPaste').value); break;
       case 'keyedit': openModal('Đáp án mã đề ' + v.m, keyEditorHtml(ST.tab().keys[v.m])); break;
       case 'keydel': if (root.confirm('Xóa đáp án mã đề ' + v.m + '?')) { delete ST.tab().keys[v.m]; ST.save(true); render(); } break;
@@ -13023,6 +13205,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $('#filePick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) processFile(f, 'file'); });
     $('#fileQr').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) decodeQrFile(f); });
     $('#fileRoster').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importRosterFile(f); });
+    $('#fileKeyTable').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importKeyTableFile(f); });
     $('#fileFill').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) handleFillFile(f); });
     $('#fileJson').addEventListener('change', (e) => {
       const f = e.target.files[0]; e.target.value = ''; if (!f) return;
