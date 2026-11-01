@@ -84,6 +84,30 @@ canvas#ov{width:100%;border-radius:10px;display:block}
 .seg2 button.on{background:var(--card);color:var(--pri);box-shadow:0 1px 2px rgba(0,0,0,.18)}
 select.inl{width:auto;max-width:9em;padding:4px 6px}
 .chk input[type=radio]{width:22px;height:22px;flex:0 0 auto}
+
+/* ===== 0.1.2: nút phụ nhỏ gọn; nút chính to và có màu riêng ===== */
+.btn{min-height:42px;padding:9px 12px;font-size:15px;border-radius:12px;margin:0 0 8px;font-weight:600}
+.btn.small{min-height:36px;padding:6px 10px;font-size:14px}
+.btn.primary{min-height:52px;font-size:16px;font-weight:700}
+.btn.big{min-height:60px;font-size:18px}
+/* Nút làm việc chính: xanh lá, to nhất */
+.btn[data-act="savenext"],.btn[data-act="scan-new"].big,.btn[data-act="retry"].big,.btn[data-act="fillgo"],.btn[data-act="docxgo"],.btn[data-act="sharefile"]{background:#16a34a;color:#fff;min-height:72px;font-size:20px;font-weight:800;box-shadow:0 3px 8px rgba(22,163,74,.35)}
+/* Lưu (không chấm tiếp): viền xanh dương, vừa */
+.btn[data-act="save"]{background:var(--card);color:var(--pri);border:2px solid var(--pri);min-height:52px;font-size:17px;font-weight:700}
+/* Xác nhận cờ: vàng cam */
+.btn[data-act="confirmflags"]{background:#f59e0b;color:#fff;min-height:52px;font-size:16px;font-weight:700;width:100%;margin-top:6px}
+/* Điền điểm vào tệp của thầy: tím */
+.btn[data-act="fill-docx"],.btn[data-act="fill-xlsx"]{background:#7c3aed;color:#fff;min-height:56px;font-size:15px;font-weight:700}
+/* Xuất .docx và nhập tự luận: xanh dương đậm */
+.btn.primary[data-act="docx"],.btn[data-act="tlquick"].primary{background:var(--pri);color:#fff;min-height:56px;font-size:17px}
+/* Hành động hủy/xóa: viền đỏ, nhỏ, dễ phân biệt */
+.btn.danger{background:transparent;color:var(--bad);border:1.5px solid var(--bad);min-height:40px;box-shadow:none;font-weight:600}
+/* Nút phụ (CSV, sao lưu, còn thiếu, đóng...) giữ trắng, nhỏ */
+.btn[data-act="csv"],.btn[data-act="backup"],.btn[data-act="missing"],.btn[data-act="close"]{min-height:42px;font-size:15px;font-weight:600}
+.cell{min-height:46px}
+.p3row input{min-height:40px}
+.list .item{padding:9px 12px}
+.btn.big[data-act="live"]{min-height:48px;font-size:16px;font-weight:600}
 </style>
 </head>
 <body>
@@ -10748,7 +10772,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (r.idx >= 0) ans = 'ABCD'[r.idx]; else if (r.idx === -2) ans = '*';
       if (r.state === 'multi') flag('p1', q + 1, 'multi', 'warn', 'Câu ' + (q + 1) + ': tô nhiều ô');
       else if (r.state === 'faint') flag('p1', q + 1, 'faint', 'warn', 'Câu ' + (q + 1) + ': tô mờ (' + ans + ')');
-      else if (r.state === 'ghost') flag('p1', q + 1, 'ghost', 'info', 'Câu ' + (q + 1) + ': có vết mờ cạnh đáp án ' + ans);
+      else if (r.state === 'ghost') flag('p1', q + 1, 'ghost', 'warn', 'Câu ' + (q + 1) + ': có vết mờ cạnh đáp án ' + ans);
       return { ans, state: r.state };
     });
 
@@ -10760,7 +10784,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const nm = 'Câu ' + (q + 1) + 'abcd'[i];
       if (r.state === 'multi') flag('p2', q * 4 + i + 1, 'multi', 'warn', 'P2 ' + nm + ': tô cả Đúng và Sai');
       else if (r.state === 'faint') flag('p2', q * 4 + i + 1, 'faint', 'warn', 'P2 ' + nm + ': tô mờ (' + (ans === 'D' ? 'Đúng' : 'Sai') + ')');
-      else if (r.state === 'ghost') flag('p2', q * 4 + i + 1, 'ghost', 'info', 'P2 ' + nm + ': có vết mờ');
+      else if (r.state === 'ghost') flag('p2', q * 4 + i + 1, 'ghost', 'warn', 'P2 ' + nm + ': có vết mờ');
       return { ans, state: r.state };
     }));
 
@@ -10777,7 +10801,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (r.idx >= 0) {
           toks.push(cand[r.idx].sym);
           if (r.state === 'faint') { flag('p3', q + 1, 'faint', 'warn', 'P3 câu ' + (q + 1) + ' cột ' + (c + 1) + ': tô mờ'); }
-          else if (r.state === 'ghost') flag('p3', q + 1, 'ghost', 'info', 'P3 câu ' + (q + 1) + ' cột ' + (c + 1) + ': có vết mờ');
+          else if (r.state === 'ghost') flag('p3', q + 1, 'ghost', 'warn', 'P3 câu ' + (q + 1) + ' cột ' + (c + 1) + ': có vết mờ');
         } else if (r.idx === -2) { toks.push('*'); anyBad = true; flag('p3', q + 1, 'multi', 'warn', 'P3 câu ' + (q + 1) + ' cột ' + (c + 1) + ': tô nhiều ô'); }
         else toks.push('');
       }
@@ -12164,6 +12188,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     o += '<button class="btn primary" data-act="docx"' + (rows.length ? '' : ' disabled') + '>📄 Xuất kết quả .docx</button>';
     o += '<div class="grid2"><button class="btn" data-act="fill-docx"' + (rows.length ? '' : ' disabled') + '>📝 Điền điểm vào DS phòng thi (.docx)</button><button class="btn" data-act="fill-xlsx"' + (rows.length ? '' : ' disabled') + '>📊 Điền điểm vào sổ điểm (.xlsx)</button></div>';
     o += '<div class="grid2"><button class="btn" data-act="csv"' + (rows.length ? '' : ' disabled') + '>CSV (Excel)</button><button class="btn" data-act="backup">💾 Sao lưu JSON</button></div>';
+    if (S.tab === 'T' && rows.length) {
+      if (cfg.tlMax > 0) { const nTl = rows.filter((r) => r.tl != null).length; o += '<button class="btn' + (nTl < rows.length ? ' primary' : '') + '" data-act="tlquick">✍️ Nhập điểm tự luận nhanh (' + nTl + '/' + rows.length + ' bài đã nhập)</button>'; }
+      else o += '<div class="note warn">Chưa đặt <b>điểm tối đa tự luận</b> (Cài đặt → Cách tính điểm). Cột "Tổng" hiện chỉ gồm phần trắc nghiệm.</div>';
+      if (!ST.lists('T').length) o += '<div class="note warn">Chưa nhập danh sách học sinh cho tab này nên cột Họ và tên để trống. Vào Cài đặt → Quản lý danh sách.</div>';
+    }
     if (miss) o += '<button class="btn" data-act="missing">👥 Còn thiếu ' + miss + ' học sinh chưa có bài</button>';
     o += '<div class="list">';
     rows.forEach((r) => {
@@ -12774,6 +12803,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         '<button class="btn small danger" style="width:100%;margin-top:8px" data-act="pdel" data-id="' + h(p.id) + '">Bỏ phiếu này</button></div>';
     }).join('');
   }
+  function tlQuickHtml() {
+    const cfg = ST.cfg('T');
+    const rows = ST.rows('T');
+    return '<div class="note info">Nhập điểm tự luận của từng bài (0 đến ' + fmt(cfg.tlMax) + '), dấu phẩy hoặc dấu chấm đều được. Tự lưu ngay khi rời ô.</div>' +
+      '<div class="card">' + rows.map((r) => '<div class="kv"><span>' + h(r.idLabel) + (r.ten ? ' · ' + h(r.ten) : '') + ' <small>(TN ' + fmt(r.p1 + r.p2 + r.p3) + ')</small></span><span><input class="inl" style="width:72px;text-align:center" inputmode="decimal" data-act="tlq" data-id="' + h(r.id) + '" value="' + (r.tl == null ? '' : String(r.tl).replace('.', ',')) + '"' + (r.tl == null ? ' style="border-color:var(--bad)"' : '') + '></span></div>').join('') + '</div>' +
+      '<button class="btn primary big" data-act="close">Xong</button>';
+  }
   function openPending() {
     openModal('Phiếu cần xử lý', pendingHtml());
     doc.querySelectorAll('img[data-thumb]').forEach((im) => { TH.get(im.getAttribute('data-thumb')).then((u) => { if (u) { im.src = u; im.style.display = 'block'; } }); });
@@ -12832,6 +12868,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       case 'manual-pending': { const id = v.id; closeModal(); openManual(S.tab, id); break; }
       case 'pending': openPending(); break;
       case 'pdel': { const t = tab(); t.pending = t.pending.filter((p) => p.id !== v.id); TH.del('p' + v.id); ST.save(true); openPending(); render(); break; }
+      case 'tlquick': openModal('Điểm tự luận', tlQuickHtml()); break;
       case 'missing': openModal('Học sinh chưa có bài', missingHtml()); break;
       case 'roster': openModal('Danh sách học sinh — ' + TABNAME[S.tab], rosterHtml()); break;
       case 'roster-paste': openModal('Dán danh sách học sinh', '<label class="f">Tên lớp (chỉ cần khi mỗi dòng chỉ có STT, không có SBD)</label><input type="text" id="rLop" placeholder="ví dụ 12A7"><label class="f">Mỗi dòng: STT hoặc số báo danh, rồi họ tên (dán từ Excel được)</label><textarea id="rTxt" placeholder="1, Nguyễn Văn An&#10;2, Trần Thị Bình"></textarea><div style="margin-top:12px"><button class="btn primary" data-act="roster-go">Đọc danh sách</button></div>'); break;
@@ -12870,6 +12907,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       else if (v.k === 'p3Numeric') cfg.p3Numeric = el.checked;
       else { const n = parseNum(el.value); if (n == null || n < 0) { toast('Nhập số không âm.', 2500); render(); return; } cfg[v.k] = ['n1', 'n2', 'n3'].indexOf(v.k) >= 0 ? Math.round(n) : n; }
       ST.save(true); render(); return;
+    }
+    if (a === 'tlq') {
+      const r = ST.tab('T').results.find((x) => x.id === v.id); if (!r) return;
+      const mx = ST.cfg('T').tlMax;
+      if (el.value.trim() === '') { r.tl = null; ST.save(true); return; }
+      const n = parseNum(el.value);
+      if (n == null || n < 0 || n > mx) { toast('Điểm tự luận phải từ 0 đến ' + fmt(mx) + '.', 3000); el.value = r.tl == null ? '' : String(r.tl).replace('.', ','); return; }
+      r.tl = n; ST.save(true); el.value = String(n).replace('.', ','); return;
     }
     if (!draft) return;
     if (a === 'sbd') { draft.sbd = el.value.replace(/\D/g, ''); if (draft.mode === 'none') draft.mode = 'sbd'; draft.fixed.sbd = 1; refreshCard(); }
