@@ -78,6 +78,12 @@ canvas#ov{width:100%;border-radius:10px;display:block}
 [hidden]{display:none!important}
 .foot-note{color:var(--mut);font-size:12px;text-align:center;margin:18px 0 0}
 .kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:15px}.kv:last-child{border:0}.kv span:first-child{color:var(--mut)}
+
+.seg2{display:flex;background:var(--line);border-radius:10px;padding:2px;gap:2px;margin:8px 0 4px}
+.seg2 button{flex:1;border:0;background:transparent;color:var(--tx);font:inherit;font-size:14px;font-weight:600;padding:7px 4px;border-radius:8px}
+.seg2 button.on{background:var(--card);color:var(--pri);box-shadow:0 1px 2px rgba(0,0,0,.18)}
+select.inl{width:auto;max-width:9em;padding:4px 6px}
+.chk input[type=radio]{width:22px;height:22px;flex:0 0 auto}
 </style>
 </head>
 <body>
@@ -93,7 +99,8 @@ canvas#ov{width:100%;border-radius:10px;display:block}
 <input id="filePick" type="file" accept="image/*" hidden>
 <input id="fileQr" type="file" accept="image/*" hidden>
 <input id="fileJson" type="file" accept=".json,application/json" hidden>
-<input id="fileRoster" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
+<input id="fileRoster" type="file" accept=".xlsx,.docx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+<input id="fileFill" type="file" accept=".docx,.xlsx" hidden>
 <script>(function webpackUniversalModuleDefinition(root, factory) {
 	if(typeof exports === 'object' && typeof module === 'object')
 		module.exports = factory();
@@ -10703,7 +10710,35 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       });
       return { str: s, ok: !bad };
     }
-    res.fields.sbd = readDigits(F.sbd, 'sbd', 'Số báo danh');
+    /* Mục 7 (số báo danh / số thứ tự): chỉ cần MỘT dãy chữ số liền nhau, các cột trống ở hai đầu bị bỏ qua.
+     * Từ 3 chữ số trở lên = SBD (thi theo phòng); 1–2 chữ số = STT (thi theo lớp). Cột trống xen giữa hoặc tô nhiều ô = lỗi. */
+    function readRun(cols, name, label) {
+      const cells = [];
+      cols.forEach((col, c) => {
+        const r = decide(col.map((m) => m.v), T, band);
+        if (r.idx >= 0) {
+          cells.push(String(r.idx));
+          if (r.state === 'faint') flag(name, c + 1, 'faint', 'warn', label + ' cột ' + (c + 1) + ': tô mờ');
+        } else if (r.idx === -2) {
+          cells.push('*');
+          flag(name, c + 1, 'multi', 'error', label + ' cột ' + (c + 1) + ': tô nhiều ô');
+        } else cells.push('.');
+      });
+      const raw = cells.join('');
+      const first = raw.search(/[0-9*]/);
+      let last = -1;
+      for (let i = raw.length - 1; i >= 0; i--) if (raw[i] !== '.') { last = i; break; }
+      if (first < 0) {
+        flag(name, 0, 'blank', 'error', label + ': chưa tô ô nào');
+        return { str: '', raw, start: -1, len: 0, ok: false };
+      }
+      const run = raw.slice(first, last + 1);
+      let ok = true;
+      if (run.indexOf('.') >= 0) { ok = false; flag(name, 0, 'gap', 'error', label + ': có cột trống xen giữa các chữ số'); }
+      if (run.indexOf('*') >= 0) ok = false;
+      return { str: run.replace(/\./g, '?'), raw, start: first, len: run.length, ok };
+    }
+    res.fields.sbd = readRun(F.sbd, 'sbd', 'Số báo danh / STT');
     res.fields.made = readDigits(F.made, 'made', 'Mã đề');
 
     // Phần I
@@ -10815,13 +10850,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       tn: U.r4(cfg.n1 * cfg.p1Pt + p2max + cfg.n3 * cfg.p3Pt), total: U.r4(cfg.n1 * cfg.p1Pt + p2max + cfg.n3 * cfg.p3Pt + (cfg.tlMax || 0)) };
   };
 
-  /** Kiểm tra đáp án so với cấu hình: trả về danh sách lỗi (rỗng = hợp lệ). */
+  /** Kiểm tra đáp án so với cấu hình: trả về danh sách lỗi (rỗng = hợp lệ). Số câu phải ĐÚNG BẰNG cấu hình
+   *  (đáp án dài hơn cấu hình trước đây bị chấm thiếu câu mà không báo). */
   S.validateKey = function (cfg, key) {
     const e = [];
     if (!key) return ['Chưa có đáp án.'];
-    if (!/^[ABCD]*$/.test(key.p1 || '') || (key.p1 || '').length < cfg.n1) e.push('Phần I cần ' + cfg.n1 + ' đáp án A–D (có ' + (key.p1 || '').length + ').');
-    if ((key.p2 || []).length < cfg.n2 || (key.p2 || []).slice(0, cfg.n2).some((g) => !/^[DS]{4}$/.test(g))) e.push('Phần II cần ' + cfg.n2 + ' câu, mỗi câu 4 ý Đ/S.');
-    if ((key.p3 || []).length < cfg.n3 || (key.p3 || []).slice(0, cfg.n3).some((a) => !/^[0-9,\-]{1,4}$/.test(S.normNum(a)))) e.push('Phần III cần ' + cfg.n3 + ' đáp số (tối đa 4 ký tự gồm số, dấu – và dấu phẩy).');
+    const p1 = key.p1 || '', p2 = key.p2 || [], p3 = key.p3 || [];
+    if (!/^[ABCD]*$/.test(p1) || p1.length !== cfg.n1) e.push('Phần I: đáp án có ' + p1.length + ' câu, cấu hình ' + cfg.n1 + ' câu.');
+    if (p2.length !== cfg.n2 || p2.some((g) => !/^[DS]{4}$/.test(g))) e.push('Phần II: đáp án có ' + p2.length + ' câu, cấu hình ' + cfg.n2 + ' câu (mỗi câu 4 ý Đ/S).');
+    if (p3.length !== cfg.n3 || p3.some((a) => !/^[0-9,\-]{1,4}$/.test(S.normNum(a)))) e.push('Phần III: đáp án có ' + p3.length + ' câu, cấu hình ' + cfg.n3 + ' câu (tối đa 4 ký tự: số, dấu – và dấu phẩy).');
     return e;
   };
 
@@ -10955,31 +10992,47 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 /* ==== 50_store.js ==== */
-/* CHẤM TRẮC NGHIỆM — lưu trữ (M7): trạng thái 2 tab, danh sách học sinh, đáp án, kết quả; CSV; sao lưu JSON.
- * Lưu bằng localStorage (try/catch); Safari có thể xoá dữ liệu trang -> luôn khuyến nghị xuất JSON sau mỗi lần nhập. */
+/* CHẤM TRẮC NGHIỆM — lưu trữ (M7): trạng thái 2 tab, danh sách học sinh (nhiều danh sách), đáp án, kết quả, hàng đợi phiếu lỗi, thống kê chụp; CSV; sao lưu JSON.
+ * Lưu bằng localStorage (try/catch); Safari có thể xoá dữ liệu trang -> luôn khuyến nghị xuất JSON sau mỗi lần nhập.
+ * Phiên bản dữ liệu v:2 (0.1.1). Dữ liệu v:1 (0.1) được chuyển đổi tự động. */
 (function (root) {
   'use strict';
   const CP = (root.CP = root.CP || {});
   const U = CP.util;
   const ST = (CP.store = {});
-  const KEY = 'cp_state_v1';
+  const KEY = 'cp_state_v1';      // giữ khoá cũ để đọc được dữ liệu bản 0.1
   let mem = null, persistent = true, timer = null;
 
   function newTab(id) {
-    return { info: { kyThi: '', mon: id === 'B' ? 'Vật lí' : '', lop: '', ngay: '' }, cfg: id === 'T' ? CP.scoring.defaultConfigT() : null, keys: {}, roster: {}, results: [] };
+    return { info: { kyThi: '', mon: id === 'B' ? 'Vật lí' : '', lop: '', ngay: '' }, cfg: id === 'T' ? CP.scoring.defaultConfigT() : null,
+      keys: {}, lists: [], activeLop: '', results: [], pending: [], stats: { ok: 0, review: 0, manual: 0, retry: 0, reasons: {} } };
   }
-  ST.fresh = function () { return { v: 1, tab: 'B', view: 'scan', tabs: { B: newTab('B'), T: newTab('T') } }; };
+  ST.fresh = function () { return { v: 2, tab: 'B', view: 'scan', tabs: { B: newTab('B'), T: newTab('T') } }; };
+
+  function migrate(s) {
+    for (const id of ['B', 'T']) {
+      const t = s.tabs[id] = Object.assign(newTab(id), s.tabs[id] || {});
+      if (t.roster && typeof t.roster === 'object') {   // v1: bản đồ SBD -> tên
+        const rows = Object.keys(t.roster).map((sbd) => ({ stt: null, sbd, name: t.roster[sbd], lop: '', dob: '' }));
+        if (rows.length) t.lists.push({ id: CP.roster.newId(), kind: 'room', name: 'Nhập tay (SBD)', title: 'Nhập tay', file: 'text', rows, meta: {} });
+        delete t.roster;
+      }
+      t.results.forEach((r) => { if (!r.mode) { r.mode = 'sbd'; r.lop = r.lop || ''; r.stt = r.stt == null ? null : r.stt; } if (!r.status) r.status = 'ok'; });
+      t.stats = Object.assign({ ok: 0, review: 0, manual: 0, retry: 0, reasons: {} }, t.stats || {});
+    }
+    s.tabs.T.cfg = Object.assign(CP.scoring.defaultConfigT(), s.tabs.T.cfg || {});
+    s.v = 2;
+    return s;
+  }
 
   ST.load = function () {
     let s = null;
     try { const raw = root.localStorage && root.localStorage.getItem(KEY); if (raw) s = JSON.parse(raw); }
     catch (e) { persistent = false; }
-    if (!s || s.v !== 1 || !s.tabs) s = ST.fresh();
-    for (const id of ['B', 'T']) { if (!s.tabs[id]) s.tabs[id] = newTab(id); }
-    s.tabs.T.cfg = Object.assign(CP.scoring.defaultConfigT(), s.tabs.T.cfg || {});
-    mem = s;
+    if (!s || !s.tabs || (s.v !== 1 && s.v !== 2)) s = ST.fresh();
+    mem = migrate(s);
     try { root.localStorage.setItem(KEY + '_probe', '1'); root.localStorage.removeItem(KEY + '_probe'); } catch (e) { persistent = false; }
-    return s;
+    return mem;
   };
   ST.get = function () { return mem || ST.load(); };
   ST.isPersistent = function () { return persistent; };
@@ -10992,67 +11045,109 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   ST.tab = function (id) { const s = ST.get(); return s.tabs[id || s.tab]; };
   ST.cfg = function (id) { id = id || ST.get().tab; return id === 'B' ? CP.scoring.CONFIG_B : ST.tab('T').cfg; };
 
-  /* ---------- danh sách học sinh (SBD -> họ tên) ---------- */
-  ST.parseRoster = function (text) {
-    const out = {}, bad = [];
-    String(text || '').split(/\r?\n/).forEach((line, i) => {
-      line = line.trim(); if (!line) return;
-      const sep = line.indexOf('\t') >= 0 ? '\t' : line.indexOf(';') >= 0 ? ';' : ',';
-      const parts = line.split(sep).map((x) => x.trim().replace(/^"|"$/g, ''));
-      // chấp nhận "SBD, Họ tên" hoặc "Họ tên, SBD" hoặc có cột STT đứng đầu
-      const idx = parts.findIndex((p) => /^\d{3,10}$/.test(p));
-      if (idx < 0) { if (i > 0 || /\d/.test(line)) bad.push(line); return; }
-      const name = parts.filter((p, k) => k !== idx && !/^\d{1,3}$/.test(p) && p).join(' ');
-      if (!name) { bad.push(line); return; }
-      out[parts[idx]] = name;
+  /* ---------- danh sách học sinh ---------- */
+  ST.lists = (tabId) => ST.tab(tabId).lists;
+  ST.classNames = (tabId) => CP.roster.classNames(ST.lists(tabId));
+  ST.rosterCount = (tabId) => ST.lists(tabId).reduce((n, l) => n + l.rows.length, 0);
+  /** Gộp các danh sách mới đọc; trả về {added, same, conflicts} (xung đột chưa áp dụng). */
+  ST.addLists = function (tabId, incoming) {
+    const t = ST.tab(tabId); let added = 0, same = 0; const conflicts = [];
+    incoming.forEach((inc) => {
+      const m = CP.roster.mergeInto(t.lists, inc);
+      t.lists = m.lists; added += m.added; same += m.same;
+      m.conflicts.forEach((c) => conflicts.push(Object.assign({ listName: inc.name, kind: inc.kind }, c)));
     });
-    return { map: out, bad };
+    const cls = ST.classNames(tabId);
+    if (!t.activeLop || !cls.some((c) => CP.roster.fold(c) === CP.roster.fold(t.activeLop))) t.activeLop = cls.length === 1 ? cls[0] : '';
+    ST.save(true);
+    return { added, same, conflicts };
   };
+  /** Đổi tên một học sinh theo xung đột (chọn dùng tên mới). */
+  ST.applyConflict = function (tabId, c) {
+    const R = CP.roster, t = ST.tab(tabId);
+    const l = t.lists.find((x) => x.kind === c.kind && R.fold(x.name) === R.fold(c.listName));
+    if (!l) return;
+    const row = l.rows.find((r) => (l.kind === 'room' ? 'S' + R.sbdKey(r.sbd) : 'T' + r.stt) === c.key);
+    if (row) row.name = c.neu;
+    ST.save(true);
+  };
+  ST.removeList = function (tabId, id) { const t = ST.tab(tabId); t.lists = t.lists.filter((l) => l.id !== id); ST.save(true); };
 
   /* ---------- kết quả ---------- */
+  ST.identKey = (r) => (r.mode === 'stt' ? 'T:' + CP.roster.fold(r.lop || '') + ':' + r.stt : 'S:' + CP.roster.sbdKey(r.sbd));
   ST.toScoringAnswers = function (ans) {
     return { p1: ans.p1.map((a) => ({ ans: a })), p2: ans.p2.map((r) => r.map((a) => ({ ans: a }))), p3: ans.p3.map((a) => ({ ans: a })) };
   };
-  /** Tính điểm cho một kết quả: trả về {key, sc, tong, max} (key=null nếu chưa có đáp án mã đề đó). */
+  /** Tra học sinh của một kết quả: {name, lop, ambiguous, found}. */
+  ST.lookup = function (tabId, r) {
+    const R = CP.roster, lists = ST.lists(tabId);
+    let hit = null;
+    if (r.mode === 'stt') hit = R.findByStt(lists, r.lop, r.stt);
+    else if (r.mode === 'sbd') hit = R.findBySbd(lists, r.sbd);
+    if (!hit) return { found: false, name: '', lop: r.lop || '' };
+    if (hit.ambiguous) return { found: true, ambiguous: true, name: '', lop: '' };
+    return { found: true, name: hit.row.name, lop: hit.row.lop || (hit.list.kind === 'class' ? hit.list.name : '') || r.lop || '' };
+  };
+  ST.nameOf = function (tabId, r) { return r.name || ST.lookup(tabId, r).name || ''; };
+  ST.lopOf = function (tabId, r) { return r.lop || ST.lookup(tabId, r).lop || ''; };
+  ST.idLabel = (r) => (r.mode === 'stt' ? 'STT ' + r.stt : r.sbd);
+
+  /** Tính điểm cho một kết quả: {key, sc, tong, max, keyErr}. */
   ST.evaluate = function (tabId, r) {
     const cfg = ST.cfg(tabId), tab = ST.tab(tabId);
     const key = tab.keys[r.made] || null;
     const mp = CP.scoring.maxPoints(cfg);
-    if (!key || CP.scoring.validateKey(cfg, key).length) return { key: key, sc: null, tong: null, max: mp };
+    if (!key) return { key: null, sc: null, tong: null, max: mp, keyErr: [] };
+    const keyErr = CP.scoring.validateKey(cfg, key);
+    if (keyErr.length) return { key, sc: null, tong: null, max: mp, keyErr };
     const sc = CP.scoring.score(cfg, key, ST.toScoringAnswers(r.ans));
     const tl = tabId === 'T' && r.tl > 0 ? r.tl : 0;
-    return { key, sc, tong: CP.scoring.total(sc, tl), max: mp };
+    return { key, sc, tong: CP.scoring.total(sc, tl), max: mp, keyErr: [] };
   };
-  ST.nameOf = function (tabId, r) { return r.name || ST.tab(tabId).roster[r.sbd] || ''; };
 
+  ST.bump = function (tabId, status, reason) {
+    const st = ST.tab(tabId).stats;
+    st[status] = (st[status] || 0) + 1;
+    if (reason) st.reasons[reason] = (st.reasons[reason] || 0) + 1;
+    ST.save();
+  };
   ST.addResult = function (tabId, r) {
-    const t = ST.tab(tabId);
-    const i = t.results.findIndex((x) => x.sbd === r.sbd);
+    const t = ST.tab(tabId), k = ST.identKey(r);
+    const i = t.results.findIndex((x) => x.id === r.id || ST.identKey(x) === k);
     if (i >= 0) t.results[i] = r; else t.results.push(r);
     ST.save();
   };
   ST.removeResult = function (tabId, id) { const t = ST.tab(tabId); t.results = t.results.filter((x) => x.id !== id); ST.save(); };
 
-  /** Hàng bảng điểm cho .docx/CSV. */
+  ST.sortKey = function (r) {
+    if (r.mode === 'stt') return '1|' + CP.roster.fold(r.lop || '') + '|' + U.pad(r.stt, 6);
+    const k = CP.roster.sbdKey(r.sbd); return '0|' + U.pad(k.length, 3) + '|' + k;
+  };
+  /** Hàng bảng điểm cho .docx/CSV/màn hình. */
   ST.rows = function (tabId) {
-    const t = ST.tab(tabId), cfg = ST.cfg(tabId);
-    const list = t.results.slice().sort((a, b) => (a.sbd < b.sbd ? -1 : a.sbd > b.sbd ? 1 : 0));
+    const t = ST.tab(tabId);
+    const list = t.results.slice().sort((a, b) => { const x = ST.sortKey(a), y = ST.sortKey(b); return x < y ? -1 : x > y ? 1 : 0; });
     return list.map((r) => {
       const ev = ST.evaluate(tabId, r);
-      return { id: r.id, ten: ST.nameOf(tabId, r), sbd: r.sbd, made: r.made, ev,
+      return { id: r.id, mode: r.mode, ten: ST.nameOf(tabId, r), lop: ST.lopOf(tabId, r), sbd: r.sbd, stt: r.stt, idLabel: ST.idLabel(r), made: r.made, ev, status: r.status || 'ok',
         p1: ev.sc ? ev.sc.p1.pts : 0, p2: ev.sc ? ev.sc.p2.pts : 0, p3: ev.sc ? ev.sc.p3.pts : 0,
-        tl: tabId === 'T' ? (r.tl == null ? null : r.tl) : null, tong: ev.tong == null ? 0 : ev.tong, sc: ev.sc, noKey: !ev.sc, flags: r.flags || [] };
+        tl: tabId === 'T' ? (r.tl == null ? null : r.tl) : null, tong: ev.tong == null ? 0 : ev.tong, sc: ev.sc, noKey: !ev.sc, flags: r.flags || [], raw: r };
     });
+  };
+  ST.missing = function (tabId) {
+    const t = ST.tab(tabId);
+    return CP.roster.missing(t.lists, t.results, null);
   };
 
   ST.csv = function (tabId) {
     const cfg = ST.cfg(tabId), rows = ST.rows(tabId), hasTL = tabId === 'T' && (cfg.tlMax > 0 || rows.some((r) => r.tl > 0));
     const q = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
-    const head = ['STT', 'Họ và tên', 'SBD', 'Mã đề', 'Phần 1', 'Phần 2', 'Phần 3'].concat(hasTL ? ['Tự luận'] : []).concat(['Tổng']);
+    const head = ['STT', 'Họ và tên', 'Lớp', 'SBD/STT lớp', 'Mã đề', 'Phần 1', 'Phần 2', 'Phần 3'].concat(hasTL ? ['Tự luận'] : []).concat(['Tổng', 'Ghi chú']);
     const lines = [head.map(q).join(';')];
     rows.forEach((r, i) => {
-      const f = (n) => U.fmt(n, 2);
-      const cells = [i + 1, q(r.ten), q(r.sbd), q(r.made), f(r.p1), f(r.p2), f(r.p3)].concat(hasTL ? [r.tl == null ? '' : f(r.tl)] : []).concat([f(r.tong)]);
+      const f = (n) => U.fmt(n, 4);
+      const note = r.noKey ? 'chưa có đáp án' : r.status === 'manual' ? 'chấm tay' : r.status === 'review' ? 'cần duyệt' : '';
+      const cells = [i + 1, q(r.ten), q(r.lop), q(r.idLabel), q(r.made), f(r.p1), f(r.p2), f(r.p3)].concat(hasTL ? [r.tl == null ? '' : f(r.tl)] : []).concat([f(r.tong), q(note)]);
       lines.push(cells.join(';'));
     });
     return '﻿' + lines.join('\r\n');
@@ -11062,12 +11157,396 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   ST.importJson = function (text) {
     let s;
     try { s = JSON.parse(text); } catch (e) { return { ok: false, error: 'Tệp không phải JSON hợp lệ.' }; }
-    if (!s || s.v !== 1 || !s.tabs || !s.tabs.B || !s.tabs.T) return { ok: false, error: 'Tệp sao lưu không đúng định dạng.' };
-    s.tabs.T.cfg = Object.assign(CP.scoring.defaultConfigT(), s.tabs.T.cfg || {});
-    mem = s; ST.save(true);
+    if (!s || (s.v !== 1 && s.v !== 2) || !s.tabs || !s.tabs.B || !s.tabs.T) return { ok: false, error: 'Tệp sao lưu không đúng định dạng.' };
+    mem = migrate(s); ST.save(true);
     return { ok: true };
   };
 
+  if (typeof module !== 'undefined' && module.exports) module.exports = CP;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+/* ==== 55_roster.js ==== */
+/* CHẤM TRẮC NGHIỆM — danh sách học sinh (M7): đọc .xlsx / .docx / văn bản dán; gộp; tra cứu theo SBD hoặc (lớp, STT).
+ * Mô-đun thuần (không DOM): chạy trong Node (kiểm thử) và Safari. Dữ liệu danh sách chỉ nằm trên máy người dùng.
+ * Danh sách: {id, kind:'room'|'class', name, title, file, rows:[{stt, sbd, name, lop, dob}]}
+ *  - room  = có cột Số báo danh (thi theo phòng): khóa SBD (so khớp bỏ số 0 đầu)
+ *  - class = chỉ có STT + họ tên của một lớp (thi theo lớp): khóa (lớp, STT) */
+(function (root) {
+  'use strict';
+  const CP = (root.CP = root.CP || {});
+  const R = (CP.roster = {});
+
+  const nfc = (s) => String(s == null ? '' : s).replace(/ /g, ' ').normalize('NFC').replace(/\s+/g, ' ').trim();
+  const fold = (s) => nfc(s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+  R.nfc = nfc; R.fold = fold;
+  R.digits = (s) => String(s == null ? '' : s).replace(/\D/g, '');
+  R.sbdKey = (s) => { const d = R.digits(s).replace(/^0+/, ''); return d === '' && R.digits(s) !== '' ? '0' : d; };
+  R.newId = () => 'ls' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const getZip = () => root.JSZip || (typeof require !== 'undefined' ? require('jszip') : null);
+
+  function unesc(s) {
+    return String(s).replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+      .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+  }
+  function attr(tag, name) { const m = new RegExp('\\b' + name.replace(':', '\\:') + '="([^"]*)"').exec(tag); return m ? unesc(m[1]) : null; }
+  function colIdx(letters) { let n = 0; for (const ch of letters.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64); return n; }
+  R._colIdx = colIdx;
+
+  /* ---------------- nhận cột theo tiêu đề ---------------- */
+  const ROLE = [
+    ['stt', /^(so ?tt|stt|tt|so thu tu)$/],
+    ['sbd', /so bao danh|^sbd$/],
+    ['name', /ho (va )?ten|^ten hoc sinh/],
+    ['lop', /^lop$/],
+    ['dob', /ngay sinh/],
+    ['diem', /^diem$/],
+    ['gk', /(^|\s)gk(\s|$)|giua (ki|ky)/],
+    ['ck', /(^|\s)ck(\s|$)|cuoi (ki|ky)/],
+  ];
+  function roleOf(text) { const f = fold(text); if (!f) return null; for (const [r, re] of ROLE) if (re.test(f)) return r; return null; }
+  R._roleOf = roleOf;
+
+  function classFromText(str) {
+    const t = nfc(str), f = fold(t);
+    const m = /^lop\s*:?\s*(.+)$/.exec(f);
+    if (!m) return '';
+    const start = f.length - m[1].length;
+    return t.slice(start).replace(/^[:\s]+/, '').trim();
+  }
+
+  function finishList(L, warnings) {
+    const stts = new Set(); let dup = 0;
+    L.rows.forEach((r) => { if (r.stt != null) { if (stts.has(r.stt)) dup++; stts.add(r.stt); } });
+    if (dup && L.kind !== 'room') warnings.push('Danh sách "' + L.name + '" có ' + dup + ' dòng trùng STT.');
+    if (L.kind === 'room') {
+      const lens = new Set(L.rows.map((r) => R.digits(r.sbd).length));
+      if (lens.size > 1) warnings.push('Danh sách "' + L.name + '": SBD có nhiều độ dài khác nhau (' + [...lens].sort().join(', ') + ' chữ số).');
+      const keys = new Map(); let clash = 0;
+      L.rows.forEach((r) => { const k = R.sbdKey(r.sbd); if (keys.has(k) && keys.get(k) !== r.name) clash++; keys.set(k, r.name); });
+      if (clash) warnings.push('Danh sách "' + L.name + '": ' + clash + ' SBD trùng nhau nhưng khác tên.');
+    }
+    return L;
+  }
+
+  /* ---------------- .xlsx ---------------- */
+  /** Đọc mọi sheet của tệp .xlsx: [{name, path, xml, grid}] (JSZip đã nạp). */
+  R._xlsxSheets = async function (zip) {
+    const wbF = zip.file('xl/workbook.xml');
+    if (!wbF) throw new Error('Không phải tệp Excel .xlsx hợp lệ.');
+    const wb = await wbF.async('string');
+    const relsF = zip.file('xl/_rels/workbook.xml.rels');
+    const rels = relsF ? await relsF.async('string') : '';
+    const relMap = {};
+    (rels.match(/<Relationship\b[^>]*>/g) || []).forEach((t) => { relMap[attr(t, 'Id')] = attr(t, 'Target'); });
+    const shared = [];
+    const ssF = zip.file('xl/sharedStrings.xml');
+    if (ssF) {
+      const ss = await ssF.async('string');
+      (ss.match(/<si\b[\s\S]*?<\/si>/g) || []).forEach((si) => {
+        shared.push(unesc((si.match(/<t\b[^>]*>[\s\S]*?<\/t>/g) || []).map((t) => t.replace(/<[^>]+>/g, '')).join('')));
+      });
+    }
+    const out = [];
+    for (const t of (wb.match(/<sheet\b[^>]*>/g) || [])) {
+      let target = relMap[attr(t, 'r:id')]; if (!target) continue;
+      target = target.replace(/^\//, ''); if (!/^xl\//.test(target)) target = 'xl/' + target;
+      const f = zip.file(target); if (!f) continue;
+      const xml = await f.async('string');
+      out.push({ name: attr(t, 'name'), path: target, xml, grid: R._readSheetXml(xml, shared) });
+    }
+    return out;
+  };
+
+  R.parseXlsx = async function (buf) {
+    const JSZipC = getZip();
+    const zip = await JSZipC.loadAsync(buf);
+    const sheets = await R._xlsxSheets(zip);
+    const lists = [], warnings = [];
+    for (const sh of sheets) { const L = R._listFromGrid(sh.grid, sh.name, warnings); if (L) lists.push(L); }
+    if (!lists.length) warnings.push('Không tìm thấy bảng có cột "Số TT/STT" và "Họ và tên" trong tệp Excel.');
+    return { lists, warnings };
+  };
+
+  /** Đọc XML của một sheet thành lưới {rows: Map(hàng -> Map(cột -> {v, num}))}. */
+  R._readSheetXml = function (xml, shared) {
+    const rows = new Map();
+    const re = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let m;
+    while ((m = re.exec(xml))) {
+      const a = m[1], inner = m[2] || '';
+      const ref = /\br="([A-Z]+)(\d+)"/.exec(a); if (!ref) continue;
+      const t = (/\bt="([^"]*)"/.exec(a) || [])[1];
+      let v = null, num = false;
+      if (t === 's') { const vv = /<v>([^<]*)<\/v>/.exec(inner); if (vv) v = shared[parseInt(vv[1], 10)] || ''; }
+      else if (t === 'inlineStr') v = unesc((inner.match(/<t\b[^>]*>[\s\S]*?<\/t>/g) || []).map((x) => x.replace(/<[^>]+>/g, '')).join(''));
+      else if (t === 'str') { const vv = /<v>([\s\S]*?)<\/v>/.exec(inner); if (vv) v = unesc(vv[1]); }
+      else { const vv = /<v>([^<]*)<\/v>/.exec(inner); if (vv) { v = vv[1]; num = true; } }
+      if (v == null || v === '') continue;
+      const r = parseInt(ref[2], 10), c = colIdx(ref[1]);
+      if (!rows.has(r)) rows.set(r, new Map());
+      rows.get(r).set(c, { v: String(v), num });
+    }
+    return { rows };
+  };
+
+  R._listFromGrid = function (grid, sheetName, warnings) {
+    const rowNums = [...grid.rows.keys()].sort((a, b) => a - b);
+    let hdr = -1;
+    for (const r of rowNums) {
+      if (r > 40) break;
+      for (const [, cell] of grid.rows.get(r)) if (roleOf(cell.v) === 'stt') { hdr = r; break; }
+      if (hdr >= 0) break;
+    }
+    if (hdr < 0) return null;
+    const cols = {};
+    const scanRow = (r) => { const row = grid.rows.get(r); if (!row) return; for (const [c, cell] of row) { const role = roleOf(cell.v); if (role && cols[role] == null) cols[role] = c; } };
+    scanRow(hdr); scanRow(hdr + 1);
+    if (cols.stt == null || cols.name == null) return null;
+    let cls = '';
+    for (const r of rowNums) { if (r > hdr) break; for (const [, cell] of grid.rows.get(r)) { const c = classFromText(cell.v); if (c) { cls = c; break; } } if (cls) break; }
+    const rows = [];
+    for (const r of rowNums) {
+      if (r <= hdr) continue;
+      const row = grid.rows.get(r);
+      const sttC = row.get(cols.stt), nameC = row.get(cols.name);
+      if (!sttC || !nameC) continue;
+      if (!/^\d+(\.0+)?$/.test(sttC.v.trim())) continue;
+      const name = nfc(nameC.v); if (!name) continue;
+      const g = (role) => (cols[role] != null && row.get(cols[role]) ? row.get(cols[role]) : null);
+      const sbdC = g('sbd');
+      const item = { stt: parseInt(sttC.v, 10), sbd: sbdC ? String(sbdC.v).trim() : '', name, lop: g('lop') ? nfc(g('lop').v) : cls, dob: g('dob') ? nfc(g('dob').v) : '' };
+      if (sbdC && sbdC.num) item._sbdNumeric = true;
+      rows.push(item);
+    }
+    if (!rows.length) return null;
+    const kind = cols.sbd != null ? 'room' : 'class';
+    const L = { id: R.newId(), kind, name: cls || nfc(sheetName), title: nfc(sheetName), file: 'xlsx', rows, meta: { gradeCols: { gk: cols.gk != null ? cols.gk : null, ck: cols.ck != null ? cols.ck : null }, headerRow: hdr } };
+    if (rows.some((x) => x._sbdNumeric) && new Set(rows.map((x) => R.digits(x.sbd).length)).size > 1) warnings.push('Cột SBD trong Excel là dạng số và có độ dài không đều: có thể đã mất số 0 đầu. Kiểm tra độ dài SBD.');
+    rows.forEach((x) => { delete x._sbdNumeric; });
+    return finishList(L, warnings);
+  };
+
+  /* ---------------- .docx ---------------- */
+  function paraText(p) {
+    const q = p.replace(/<w:tab\/>|<w:br\/>/g, '<w:t> </w:t>');
+    return unesc((q.match(/<w:t\b[^>]*>[^<]*<\/w:t>/g) || []).map((t) => t.replace(/<[^>]+>/g, '')).join(''));
+  }
+  R._paraText = paraText;
+  function docxTables(xml) {
+    const body = xml;
+    const out = [];
+    const re = /<w:tbl>[\s\S]*?<\/w:tbl>/g; let m;
+    while ((m = re.exec(body))) {
+      const tbl = m[0], base = m.index;
+      const rows = [];
+      const rr = /<w:tr[ >][\s\S]*?<\/w:tr>/g; let rm;
+      while ((rm = rr.exec(tbl))) {
+        const tr = rm[0], rowStart = base + rm.index;
+        const cells = []; let pos = 0;
+        const cr = /<w:tc>[\s\S]*?<\/w:tc>/g; let cm;
+        while ((cm = cr.exec(tr))) {
+          const tc = cm[0];
+          const w = parseInt((/<w:tcW\b[^>]*w:w="(\d+)"/.exec(tc) || [0, 0])[1], 10) || 0;
+          const paras = (tc.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || []).map(paraText);
+          cells.push({ text: nfc(paras.join(' ')), start: pos, end: pos + w, w, off: rowStart + cm.index, len: tc.length, vcont: /<w:vMerge\s*\/>/.test(tc) });
+          pos += w;
+        }
+        rows.push({ cells, off: rowStart, len: tr.length });
+      }
+      out.push({ rows, off: base, len: tbl.length });
+    }
+    return out;
+  }
+  R._docxTables = docxTables;
+
+  function colsFromHeader(rows, hdrIdx) {
+    const hdr = rows[hdrIdx], cols = [];
+    hdr.cells.forEach((c, i) => {
+      let text = c.text;
+      if (!text && rows[hdrIdx + 1]) { const nx = rows[hdrIdx + 1].cells.find((d) => Math.abs(d.start - c.start) < 30); if (nx) text = nx.text; }
+      cols.push({ text, role: roleOf(text), start: c.start, end: c.end, idx: i });
+    });
+    return cols;
+  }
+  function cellAt(row, col) {
+    let best = null, bo = 0;
+    for (const c of row.cells) { const o = Math.min(c.end, col.end) - Math.max(c.start, col.start); if (o > bo) { bo = o; best = c; } }
+    return best && bo > 0.3 * (col.end - col.start) ? best : null;
+  }
+
+  R.parseDocx = async function (buf) {
+    const JSZipC = getZip();
+    const zip = await JSZipC.loadAsync(buf);
+    const f = zip.file('word/document.xml');
+    if (!f) throw new Error('Không phải tệp Word .docx hợp lệ.');
+    const xml = await f.async('string');
+    const tables = docxTables(xml);
+    const outside = xml.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/g, '');
+    const titles = (outside.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || []).map((p) => nfc(paraText(p))).filter(Boolean);
+    const lists = [], warnings = [];
+    tables.forEach((tb, ti) => {
+      let hdr = -1;
+      for (let i = 0; i < Math.min(6, tb.rows.length); i++) if (tb.rows[i].cells.some((c) => roleOf(c.text) === 'stt')) { hdr = i; break; }
+      if (hdr < 0) return;
+      const cols = colsFromHeader(tb.rows, hdr);
+      const by = {}; cols.forEach((c) => { if (c.role && by[c.role] == null) by[c.role] = c; });
+      if (!by.stt || !by.name) return;
+      const rows = [];
+      for (let i = hdr + 1; i < tb.rows.length; i++) {
+        const row = tb.rows[i];
+        const g = (role) => { const c = by[role] ? cellAt(row, by[role]) : null; return c ? c.text : ''; };
+        const stt = g('stt');
+        if (!/^\d+$/.test(stt)) continue;
+        const name = g('name'); if (!name) continue;
+        rows.push({ stt: parseInt(stt, 10), sbd: by.sbd ? g('sbd').replace(/\s+/g, '') : '', name, lop: g('lop'), dob: g('dob') });
+      }
+      if (!rows.length) return;
+      const title = titles.find((t) => /danh s[áa]ch/i.test(t)) || titles[0] || 'Danh sách';
+      const room = /ph[òo]ng(?:\s+thi)?(?:\s+s[ốo])?\s*[:.\-]?\s*(\d+)/i.exec(titles.join(' | '));
+      const kind = by.sbd ? 'room' : 'class';
+      const L = { id: R.newId(), kind, name: kind === 'room' ? (room ? 'Phòng ' + room[1] : title) : title, title, file: 'docx', rows, meta: { hasDiem: !!by.diem } };
+      lists.push(finishList(L, warnings));
+    });
+    if (!lists.length) warnings.push('Không tìm thấy bảng có cột "STT/Số TT" và "Họ và tên" trong tệp Word.');
+    return { lists, warnings };
+  };
+
+  /* ---------------- văn bản dán / CSV ---------------- */
+  R.parseText = function (text, listName) {
+    const rows = [], warnings = [], bad = [];
+    String(text || '').replace(/^﻿/, '').split(/\r?\n/).forEach((line) => {
+      line = line.trim(); if (!line) return;
+      const sep = line.indexOf('\t') >= 0 ? '\t' : line.indexOf(';') >= 0 ? ';' : ',';
+      const parts = line.split(sep).map((x) => nfc(x.replace(/^"|"$/g, ''))).filter(Boolean);
+      const nums = parts.filter((p) => /^\d+$/.test(p));
+      const words = parts.filter((p) => !/^\d+$/.test(p));
+      if (!nums.length || !words.length) { bad.push(line); return; }
+      let stt = null, sbd = '';
+      if (nums.length >= 2) { stt = parseInt(nums[0], 10); sbd = nums[1]; }
+      else if (nums[0].length >= 3) sbd = nums[0];
+      else stt = parseInt(nums[0], 10);
+      rows.push({ stt, sbd, name: words.join(' '), lop: '', dob: '' });
+    });
+    if (bad.length) warnings.push('Bỏ qua ' + bad.length + ' dòng không có đủ số và họ tên.');
+    if (!rows.length) return { lists: [], warnings: warnings.concat(['Không đọc được dòng nào. Mỗi dòng cần số (SBD hoặc STT) và họ tên.']) };
+    const kind = rows.some((r) => r.sbd) ? 'room' : 'class';
+    return { lists: [finishList({ id: R.newId(), kind, name: listName || (kind === 'room' ? 'Nhập tay (SBD)' : 'Nhập tay (lớp)'), title: 'Nhập tay', file: 'text', rows, meta: {} }, warnings)], warnings };
+  };
+
+  /* ---------------- gộp ---------------- */
+  const rowKey = (kind, r) => (kind === 'room' ? 'S' + R.sbdKey(r.sbd) : 'T' + r.stt);
+  /** Gộp list `inc` vào mảng `lists` (cùng kind và cùng tên thì gộp dòng). Không ghi đè tên khác nhau: trả về xung đột. */
+  R.mergeInto = function (lists, inc) {
+    const out = lists.map((l) => Object.assign({}, l, { rows: l.rows.slice() }));
+    const tgt = out.find((l) => l.kind === inc.kind && fold(l.name) === fold(inc.name));
+    const conflicts = []; let added = 0, same = 0;
+    if (!tgt) { out.push(Object.assign({}, inc, { rows: inc.rows.slice() })); return { lists: out, conflicts, added: inc.rows.length, same: 0 }; }
+    const idx = new Map(tgt.rows.map((r, i) => [rowKey(tgt.kind, r), i]));
+    inc.rows.forEach((r) => {
+      const k = rowKey(inc.kind, r);
+      if (!idx.has(k)) { tgt.rows.push(r); idx.set(k, tgt.rows.length - 1); added++; return; }
+      const old = tgt.rows[idx.get(k)];
+      if (fold(old.name) === fold(r.name)) { same++; if (!old.lop && r.lop) old.lop = r.lop; if (!old.dob && r.dob) old.dob = r.dob; if (!old.sbd && r.sbd) old.sbd = r.sbd; if (old.stt == null && r.stt != null) old.stt = r.stt; }
+      else conflicts.push({ list: tgt.name, key: k, old: old.name, neu: r.name, stt: r.stt, sbd: r.sbd });
+    });
+    tgt.meta = Object.assign({}, tgt.meta || {}, inc.meta || {});
+    return { lists: out, conflicts, added, same };
+  };
+
+  /* ---------------- tra cứu ---------------- */
+  R.findBySbd = function (lists, sbd) {
+    const k = R.sbdKey(sbd); if (k === '') return null;
+    const hits = [];
+    lists.forEach((l) => l.rows.forEach((r) => { if (r.sbd && R.sbdKey(r.sbd) === k) hits.push({ row: r, list: l }); }));
+    if (!hits.length) return null;
+    const names = new Set(hits.map((h) => fold(h.row.name)));
+    if (names.size > 1) return { ambiguous: true, hits };
+    return hits[0];
+  };
+  R.classNames = (lists) => lists.filter((l) => l.kind === 'class').map((l) => l.name);
+  R.findByStt = function (lists, lop, stt) {
+    const cls = lists.filter((l) => l.kind === 'class');
+    let l = lop ? cls.find((x) => fold(x.name) === fold(lop)) : (cls.length === 1 ? cls[0] : null);
+    if (!l) return null;
+    const row = l.rows.find((r) => r.stt === stt);
+    return row ? { row, list: l } : null;
+  };
+  /** Gợi ý SBD gần đúng: cùng độ dài (sau khi bỏ số 0 đầu), khác đúng 1 chữ số. */
+  R.nearBySbd = function (lists, sbd) {
+    const k = R.sbdKey(sbd); if (k.length < 3) return [];
+    const out = [];
+    lists.forEach((l) => l.rows.forEach((r) => {
+      if (!r.sbd) return;
+      const q = R.sbdKey(r.sbd); if (q.length !== k.length || q === k) return;
+      let d = 0; for (let i = 0; i < k.length; i++) if (k[i] !== q[i]) d++;
+      if (d === 1) out.push({ sbd: r.sbd, name: r.name, lop: r.lop });
+    }));
+    return out.slice(0, 3);
+  };
+  /** Học sinh chưa có bài. results: [{mode, sbd, stt, lop}] */
+  R.missing = function (lists, results, scope) {
+    const out = [];
+    const sbdSet = new Set(results.filter((r) => r.mode === 'sbd').map((r) => R.sbdKey(r.sbd)));
+    const sttSet = new Set(results.filter((r) => r.mode === 'stt').map((r) => fold(r.lop || '') + ':' + r.stt));
+    lists.forEach((l) => {
+      if (scope && scope.lop && l.kind === 'class' && fold(l.name) !== fold(scope.lop)) return;
+      l.rows.forEach((r) => {
+        if (l.kind === 'room') { if (!sbdSet.has(R.sbdKey(r.sbd))) out.push({ list: l.name, kind: 'room', sbd: r.sbd, stt: r.stt, name: r.name, lop: r.lop }); }
+        else if (!sttSet.has(fold(l.name) + ':' + r.stt)) out.push({ list: l.name, kind: 'class', stt: r.stt, name: r.name, lop: l.name });
+      });
+    });
+    return out;
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = CP;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+/* ==== 57_thumbs.js ==== */
+/* CHẤM TRẮC NGHIỆM — ảnh thu nhỏ của phiếu lỗi / cần duyệt / chấm tay, lưu bằng IndexedDB trên chính iPhone (không gửi đi đâu).
+ * Mục đích: duyệt lại sau mà không cần phiếu giấy bên cạnh. Không có IndexedDB thì các hàm không làm gì. */
+(function (root) {
+  'use strict';
+  const CP = (root.CP = root.CP || {});
+  const T = (CP.thumbs = {});
+  const DB = 'cp_thumbs_v1', STORE = 'img';
+  let dbp = null;
+  function open() {
+    if (dbp) return dbp;
+    dbp = new Promise((res) => {
+      try {
+        if (typeof root.indexedDB === 'undefined' || !root.indexedDB) return res(null);
+        const rq = root.indexedDB.open(DB, 1);
+        rq.onupgradeneeded = () => { rq.result.createObjectStore(STORE); };
+        rq.onsuccess = () => res(rq.result);
+        rq.onerror = () => res(null);
+        rq.onblocked = () => res(null);
+      } catch (e) { res(null); }
+    });
+    return dbp;
+  }
+  function tx(mode, fn) {
+    return open().then((db) => new Promise((res) => {
+      if (!db) return res(null);
+      try { const t = db.transaction(STORE, mode); const out = fn(t.objectStore(STORE)); t.oncomplete = () => res(out && out.result !== undefined ? out.result : true); t.onerror = () => res(null); t.onabort = () => res(null); } catch (e) { res(null); }
+    }));
+  }
+  /** Tạo dataURL JPEG thu nhỏ (cạnh dài ≤ maxSide) từ canvas. */
+  T.make = function (canvas, maxSide, quality) {
+    try {
+      const s = Math.min(1, (maxSide || 900) / Math.max(canvas.width, canvas.height));
+      const c = root.document.createElement('canvas');
+      c.width = Math.max(1, Math.round(canvas.width * s)); c.height = Math.max(1, Math.round(canvas.height * s));
+      c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+      return c.toDataURL('image/jpeg', quality || 0.6);
+    } catch (e) { return null; }
+  };
+  T.put = (id, dataUrl) => (dataUrl ? tx('readwrite', (st) => st.put(dataUrl, id)) : Promise.resolve(null));
+  T.get = (id) => open().then((db) => new Promise((res) => {
+    if (!db) return res(null);
+    try { const rq = db.transaction(STORE, 'readonly').objectStore(STORE).get(id); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => res(null); } catch (e) { res(null); }
+  }));
+  T.del = (id) => tx('readwrite', (st) => st.delete(id));
+  T.clear = () => tx('readwrite', (st) => st.clear());
   if (typeof module !== 'undefined' && module.exports) module.exports = CP;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
@@ -11126,16 +11605,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     // bảng điểm
     b.push(para('1. Bảng điểm', { bold: true, size: 26, before: 120, after: 80, keepNext: true }));
-    const hasTL = !!o.hasTL;
-    const base = hasTL ? [500, 2300, 1100, 800, 850, 850, 850, 850, 1000] : [500, 2800, 1100, 800, 900, 900, 900, 1100];
-    const W = scale(base, PAGE_W);
-    const labels = hasTL ? ['STT', 'Họ và tên', 'SBD', 'Mã đề', 'Phần 1', 'Phần 2', 'Phần 3', 'Tự luận', 'Tổng'] : ['STT', 'Họ và tên', 'SBD', 'Mã đề', 'Phần 1', 'Phần 2', 'Phần 3', 'Tổng'];
-    const rows = [hdrRow(W, labels)];
+    const hasTL = !!o.hasTL, hasLop = !!o.hasLop;
+    const spec = [['STT', 500, 'stt'], ['Họ và tên', 2300, 'ten']];
+    if (hasLop) spec.push(['Lớp', 800, 'lop']);
+    spec.push(['SBD / STT lớp', 1200, 'id'], ['Mã đề', 800, 'made'], ['Phần 1', 850, 'p1'], ['Phần 2', 850, 'p2'], ['Phần 3', 850, 'p3']);
+    if (hasTL) spec.push(['Tự luận', 900, 'tl']);
+    spec.push(['Tổng', 1000, 'tong']);
+    const W = scale(spec.map((x) => x[1]), PAGE_W);
+    const rows = [hdrRow(W, spec.map((x) => x[0]))];
     o.rows.forEach((r, i) => {
-      const c = [cell(String(i + 1), W[0]), cell(r.ten || '(chưa có trong danh sách)', W[1], { align: 'left' }), cell(r.sbd, W[2]), cell(r.made, W[3]),
-        cell(f2(r.p1), W[4]), cell(f2(r.p2), W[5]), cell(f2(r.p3), W[6])];
-      if (hasTL) c.push(cell(r.tl == null ? '' : f2(r.tl), W[7]));
-      c.push(cell(f2(r.tong), W[W.length - 1], { bold: true }));
+      const c = spec.map((sp, j) => {
+        switch (sp[2]) {
+          case 'stt': return cell(String(i + 1), W[j]);
+          case 'ten': return cell(r.ten || '(chưa có trong danh sách)', W[j], { align: 'left' });
+          case 'lop': return cell(r.lop || '', W[j]);
+          case 'id': return cell(r.idLabel || r.sbd || '', W[j]);
+          case 'made': return cell(r.made, W[j]);
+          case 'p1': return cell(f2(r.p1), W[j]);
+          case 'p2': return cell(f2(r.p2), W[j]);
+          case 'p3': return cell(f2(r.p3), W[j]);
+          case 'tl': return cell(r.tl == null ? '' : f2(r.tl), W[j]);
+          default: return cell(f2(r.tong), W[j], { bold: true });
+        }
+      });
       rows.push({ cells: c });
     });
     if (!o.rows.length) rows.push({ cells: [cell('(chưa có bài nào)', PAGE_W, { span: W.length, align: 'left' })] });
@@ -11156,15 +11648,26 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     b.push(para('3. Bài cần kiểm tra', { bold: true, size: 26, before: 240, after: 80, keepNext: true }));
     if (!o.flagged || !o.flagged.length) b.push(para('Không có bài nào bị gắn cờ.', { size: 24 }));
     else {
-      const fw = scale([2800, 1100, 5738], PAGE_W);
+      const fw = scale([2800, 1300, 5538], PAGE_W);
       const fr = [hdrRow(fw, ['Họ và tên', 'SBD', 'Ghi chú'])];
       o.flagged.forEach((f) => fr.push({ cells: [cell(f.ten || '(chưa có tên)', fw[0], { align: 'left' }), cell(f.sbd, fw[1]), cell(f.text, fw[2], { align: 'left' })] }));
       b.push(table(fw, fr));
     }
 
+    // học sinh chưa có bài
+    let secNo = 4;
+    if (o.missing && o.missing.length) {
+      b.push(para(secNo + '. Học sinh chưa có bài (' + o.missing.length + ')', { bold: true, size: 26, before: 240, after: 80, keepNext: true }));
+      const mw = scale([700, 3600, 1300, 4038], PAGE_W);
+      const mr = [hdrRow(mw, ['STT', 'Họ và tên', 'Lớp', 'SBD'])];
+      o.missing.forEach((m) => mr.push({ cells: [cell(m.stt == null ? '' : String(m.stt), mw[0]), cell(m.ten, mw[1], { align: 'left' }), cell(m.lop || '', mw[2]), cell(m.sbd || '', mw[3])] }));
+      b.push(table(mw, mr));
+      secNo++;
+    }
+
     // tỉ lệ đúng từng câu (tuỳ chọn)
     if (o.perQ) {
-      b.push(para('4. Tỉ lệ làm đúng từng câu', { bold: true, size: 26, before: 240, after: 80, keepNext: true }));
+      b.push(para(secNo + '. Tỉ lệ làm đúng từng câu', { bold: true, size: 26, before: 240, after: 80, keepNext: true }));
       [['Phần 1', o.perQ.p1], ['Phần 2 (từng ý)', o.perQ.p2], ['Phần 3', o.perQ.p3]].forEach(([nm, arr]) => {
         if (!arr.length) return;
         b.push(para(nm, { bold: true, after: 40, before: 80, keepNext: true }));
@@ -11189,7 +11692,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         b.push(pageBreak);
         b.push(para('PHIẾU KẾT QUẢ CHI TIẾT', { bold: true, size: 28, align: 'center', after: 40 }));
         (o.subtitle || []).forEach((l) => b.push(para(l, { align: 'center', size: 22, after: 10 })));
-        b.push(para([run('Họ và tên: ', { size: 24 }), run(s.ten || '(chưa có trong danh sách)', { bold: true, size: 24 }), run('     SBD: ' + s.sbd + '     Mã đề: ' + s.made, { size: 24 })], { before: 120, after: 40 }));
+        b.push(para([run('Họ và tên: ', { size: 24 }), run(s.ten || '(chưa có trong danh sách)', { bold: true, size: 24 }), run((s.lop ? '     Lớp: ' + s.lop : '') + '     ' + (s.mode === 'stt' ? 'STT lớp: ' + s.stt : 'SBD: ' + s.sbd) + '     Mã đề: ' + s.made, { size: 24 })], { before: 120, after: 40 }));
         b.push(para('Phần 1: ' + f2(s.p1) + '   Phần 2: ' + f2(s.p2) + '   Phần 3: ' + f2(s.p3) + (s.tl != null && o.hasTL ? '   Tự luận: ' + f2(s.tl) : '') + '   TỔNG: ' + f2(s.tong), { bold: true, size: 24, after: 100 }));
         const sc = s.sc;
         const dash = (x) => (x === '' || x == null ? '—' : x);
@@ -11249,6 +11752,215 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     zip.file('word/_rels/document.xml.rels', DOCRELS);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
   };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = CP;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+/* ==== 65_fill.js ==== */
+/* CHẤM TRẮC NGHIỆM — điền điểm vào tệp danh sách có sẵn của thầy (M7b):
+ *  - Word (.docx) danh sách phòng thi: điền cột "Điểm" theo SBD.
+ *  - Excel (.xlsx) sổ điểm: điền cột "ĐĐG GK" hoặc "ĐĐG CK" theo (lớp, STT); kết quả theo SBD thì ghép theo họ tên trong lớp.
+ * Tạo BẢN SAO, không đụng tệp gốc; giữ nguyên định dạng; điểm giữ nguyên giá trị (không làm tròn). Chạy trong trình duyệt. */
+(function (root) {
+  'use strict';
+  const CP = (root.CP = root.CP || {});
+  const R = CP.roster, U = CP.util;
+  const F = (CP.fill = {});
+  const getZip = () => root.JSZip || (typeof require !== 'undefined' ? require('jszip') : null);
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const val = (n) => U.r4(n);
+
+  /* ------------------------------------------------ Word */
+  function setCellText(tc, text) {
+    const t = esc(text);
+    const pm = /<w:p[ >][\s\S]*?<\/w:p>/.exec(tc);
+    if (!pm) return tc;
+    let p = pm[0];
+    const tags = p.match(/<w:t\b[^>]*>[^<]*<\/w:t>/g);
+    if (tags && tags.length) {
+      let first = true;
+      p = p.replace(/<w:t\b[^>]*>[^<]*<\/w:t>/g, () => { if (first) { first = false; return '<w:t xml:space="preserve">' + t + '</w:t>'; } return '<w:t></w:t>'; });
+    } else {
+      const rpr = (/<w:pPr>[\s\S]*?(<w:rPr>[\s\S]*?<\/w:rPr>)[\s\S]*?<\/w:pPr>/.exec(p) || [])[1] || '';
+      p = p.replace(/<\/w:p>$/, '<w:r>' + rpr + '<w:t xml:space="preserve">' + t + '</w:t></w:r></w:p>');
+    }
+    return tc.slice(0, pm.index) + p + tc.slice(pm.index + pm[0].length);
+  }
+
+  /** scores: [{sbd, score}] -> điền cột Điểm. Trả về {bytes, matched, rowsNoScore, unused, error}. */
+  F.fillDocx = async function (buf, scores) {
+    const JSZipC = getZip();
+    const zip = await JSZipC.loadAsync(buf);
+    const f = zip.file('word/document.xml');
+    if (!f) return { error: 'Không phải tệp Word .docx hợp lệ.' };
+    let xml = await f.async('string');
+    const tables = R._docxTables(xml);
+    const map = new Map(scores.map((s) => [R.sbdKey(s.sbd), s]));
+    const used = new Set(), matched = [], rowsNoScore = [];
+    const edits = [];
+    let found = false;
+    for (const tb of tables) {
+      let hdr = -1;
+      for (let i = 0; i < Math.min(6, tb.rows.length); i++) if (tb.rows[i].cells.some((c) => R._roleOf(c.text) === 'stt')) { hdr = i; break; }
+      if (hdr < 0) continue;
+      const cols = [];
+      tb.rows[hdr].cells.forEach((c, i) => {
+        let text = c.text;
+        if (!text && tb.rows[hdr + 1]) { const nx = tb.rows[hdr + 1].cells.find((d) => Math.abs(d.start - c.start) < 30); if (nx) text = nx.text; }
+        cols.push({ role: R._roleOf(text), start: c.start, end: c.end });
+      });
+      const by = {}; cols.forEach((c) => { if (c.role && by[c.role] == null) by[c.role] = c; });
+      if (!by.sbd || !by.diem || !by.name) continue;
+      found = true;
+      const at = (row, col) => { let best = null, bo = 0; for (const c of row.cells) { const o = Math.min(c.end, col.end) - Math.max(c.start, col.start); if (o > bo) { bo = o; best = c; } } return best; };
+      for (let i = hdr + 1; i < tb.rows.length; i++) {
+        const row = tb.rows[i];
+        const sc = at(row, cols.find((c) => c.role === 'stt')); if (!sc || !/^\d+$/.test(sc.text)) continue;
+        const sbdC = at(row, by.sbd), diemC = at(row, by.diem), nameC = at(row, by.name);
+        if (!sbdC || !diemC) continue;
+        const k = R.sbdKey(sbdC.text), hit = map.get(k);
+        if (!hit) { rowsNoScore.push({ stt: parseInt(sc.text, 10), sbd: sbdC.text, name: nameC ? nameC.text : '' }); continue; }
+        used.add(k);
+        edits.push({ off: diemC.off, len: diemC.len, text: U.fmt(val(hit.score), 4) });
+        matched.push({ stt: parseInt(sc.text, 10), sbd: sbdC.text, name: nameC ? nameC.text : '', score: val(hit.score) });
+      }
+    }
+    if (!found) return { error: 'Không thấy bảng có đủ cột "Số báo danh", "Họ và tên" và "Điểm" trong tệp Word này.' };
+    edits.sort((a, b) => b.off - a.off).forEach((e) => { xml = xml.slice(0, e.off) + setCellText(xml.slice(e.off, e.off + e.len), e.text) + xml.slice(e.off + e.len); });
+    zip.file('word/document.xml', xml);
+    const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    return { bytes, matched, rowsNoScore, unused: scores.filter((s) => !used.has(R.sbdKey(s.sbd))) };
+  };
+
+  /* ------------------------------------------------ Excel */
+  function colLetters(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+  F._colLetters = colLetters;
+
+  function setNumericCell(xml, rowNum, colN, value) {
+    const rowRe = new RegExp('<row\\b[^>]*?\\br="' + rowNum + '"(?=[\\s>/])[^>]*?(/>|>)');
+    const rm = rowRe.exec(xml); if (!rm) return null;
+    if (rm[1] === '/>') return null;
+    const start = rm.index, openEnd = start + rm[0].length, close = xml.indexOf('</row>', openEnd);
+    if (close < 0) return null;
+    let body = xml.slice(openEnd, close);
+    const ref = colLetters(colN) + rowNum;
+    const cellRe = new RegExp('<c\\b[^>]*\\br="' + ref + '"(?:[^>]*/>|[^>]*>[\\s\\S]*?</c>)');
+    const cm = cellRe.exec(body);
+    const s = cm ? (/\bs="(\d+)"/.exec(cm[0]) || [])[1] : null;
+    const cell = '<c r="' + ref + '"' + (s != null ? ' s="' + s + '"' : '') + '><v>' + String(value) + '</v></c>';
+    if (cm) body = body.slice(0, cm.index) + cell + body.slice(cm.index + cm[0].length);
+    else {
+      let insertAt = body.length;
+      const re = /<c\b[^>]*\br="([A-Z]+)\d+"/g; let m;
+      while ((m = re.exec(body))) { if (R._colIdx(m[1]) > colN) { insertAt = m.index; break; } }
+      body = body.slice(0, insertAt) + cell + body.slice(insertAt);
+    }
+    return xml.slice(0, openEnd) + body + xml.slice(close);
+  }
+  F._setNumericCell = setNumericCell;
+
+  /** Đọc tiêu đề tệp Excel để thầy chọn cột: {lop, cols:{gk,ck}, rows:n, sheet}. */
+  /** Tìm các hàng học sinh trong lưới có cột "SBD" và "Điểm" (nhiều phòng xếp chồng trong một trang vẫn được: mỗi khối tiêu đề đặt lại cột).
+   *  Trả {diemCol, items:[{row, key}]} hoặc null. */
+  function roomScan(grid) {
+    const rowNums = [...grid.rows.keys()].sort((a, b) => a - b);
+    let cur = null; const items = []; let diemCol = null;
+    for (const r of rowNums) {
+      const cells = grid.rows.get(r);
+      let sb = null, di = null;
+      for (const [c, cell] of cells) { const role = R._roleOf(cell.v); if (role === 'sbd' && sb == null) sb = c; else if (role === 'diem' && di == null) di = c; }
+      if (sb != null && di != null) { cur = { sbd: sb, diem: di }; if (diemCol == null) diemCol = di; continue; }
+      if (!cur) continue;
+      const c = cells.get(cur.sbd);
+      if (c && /^\d{3,}(\.0+)?$/.test(c.v.trim())) items.push({ row: r, key: R.sbdKey(c.v.trim().replace(/\.0+$/, '')), col: cur.diem });
+    }
+    return items.length ? { diemCol, items } : null;
+  }
+  F.inspectXlsx = async function (buf) {
+    const zip = await getZip().loadAsync(buf);
+    const sheets = await R._xlsxSheets(zip);
+    const rooms = [];
+    for (const sh of sheets) { const sc = roomScan(sh.grid); if (sc) rooms.push({ name: sh.name, rows: sc.items.length }); }
+    if (rooms.length) return { type: 'room', sheets: rooms, rows: rooms.reduce((a, x) => a + x.rows, 0) };
+    for (const sh of sheets) {
+      const L = R._listFromGrid(sh.grid, sh.name, []);
+      if (L) return { type: 'class', sheet: sh.name, lop: L.name, rows: L.rows.length, gradeCols: L.meta.gradeCols };
+    }
+    return null;
+  };
+
+  /** results: [{mode:'stt'|'sbd', stt, lop, name, score}]. opts: {col:'gk'|'ck'|<số cột 1-based>, lop}
+   *  Ghép theo (lớp, STT); kết quả theo SBD ghép theo họ tên trong lớp của tệp. */
+  F.fillXlsx = async function (buf, results, opts) {
+    const JSZipC = getZip();
+    const zip = await JSZipC.loadAsync(buf);
+    const sheets = await R._xlsxSheets(zip);
+    let sh = null, L = null;
+    for (const s of sheets) { const l = R._listFromGrid(s.grid, s.name, []); if (l) { sh = s; L = l; break; } }
+    if (!L) return { error: 'Không thấy bảng có cột "Số TT" và "Họ và tên học sinh" trong tệp Excel này.' };
+    let colN = opts.col;
+    if (colN === 'gk' || colN === 'ck') colN = L.meta.gradeCols[colN];
+    else if (typeof colN !== 'number') colN = null;
+    if (!colN) return { error: 'Không tìm thấy cột "' + String(opts.col).toUpperCase() + '" trong tiêu đề của tệp Excel.' };
+    const fileLop = L.name, target = opts.lop || fileLop;
+    const lopOk = (x) => !x || !target || R.fold(x) === R.fold(target);
+    const byStt = new Map(), byName = new Map();
+    results.forEach((r) => {
+      if (r.mode === 'stt' && lopOk(r.lop)) byStt.set(r.stt, r);
+      else if (r.mode === 'sbd' && r.name && (!r.lop || R.fold(r.lop) === R.fold(fileLop))) byName.set(R.fold(r.name), r);
+    });
+    const used = new Set(); let xml = sh.xml; const matched = [], noScore = [];
+    for (const row of L.rows) {
+      const hit = byStt.get(row.stt) || byName.get(R.fold(row.name));
+      if (!hit) { noScore.push({ stt: row.stt, name: row.name }); continue; }
+      const rowNum = findRowNum(sh.grid, row);
+      const nx = setNumericCell(xml, rowNum, colN, val(hit.score));
+      if (!nx) { noScore.push({ stt: row.stt, name: row.name, reason: 'không ghi được' }); continue; }
+      xml = nx; used.add(hit); matched.push({ stt: row.stt, name: row.name, score: val(hit.score), by: byStt.get(row.stt) ? 'stt' : 'tên' });
+    }
+    zip.file(sh.path, xml);
+    const wbF = zip.file('xl/workbook.xml');
+    if (wbF) {
+      let wb = await wbF.async('string');
+      if (/<calcPr\b/.test(wb)) { if (!/fullCalcOnLoad/.test(wb)) wb = wb.replace(/<calcPr\b/, '<calcPr fullCalcOnLoad="1"'); zip.file('xl/workbook.xml', wb); }
+    }
+    const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    return { bytes, matched, noScore, lop: fileLop, unused: results.filter((r) => !used.has(r) && (r.mode === 'stt' ? lopOk(r.lop) : true)) };
+  };
+  /** Điền cột "Điểm" của danh sách phòng thi .xlsx theo SBD, trong MỌI trang có cột SBD và Điểm. items: [{sbd, score}] */
+  F.fillXlsxRoom = async function (buf, items) {
+    const zip = await getZip().loadAsync(buf);
+    const sheets = await R._xlsxSheets(zip);
+    const by = new Map(); items.forEach((it) => { const k = R.sbdKey(it.sbd); if (k) by.set(k, it); });
+    const used = new Set(), perSheet = [], matched = new Set();
+    for (const sh of sheets) {
+      const sc = roomScan(sh.grid); if (!sc) continue;
+      let xml = sh.xml, filled = 0, empty = 0;
+      for (const it of sc.items) {
+        const hit = by.get(it.key);
+        if (!hit) { empty++; continue; }
+        const nx = setNumericCell(xml, it.row, it.col, val(hit.score));
+        if (!nx) { empty++; continue; }
+        xml = nx; filled++; used.add(it.key); matched.add(it.key);
+      }
+      zip.file(sh.path, xml);
+      perSheet.push({ name: sh.name, filled, empty, total: sc.items.length });
+    }
+    if (!perSheet.length) return { error: 'Không thấy bảng có cột "SBD" và "Điểm" trong tệp Excel này.' };
+    const wbF = zip.file('xl/workbook.xml');
+    if (wbF) { let wb = await wbF.async('string'); if (/<calcPr\b/.test(wb) && !/fullCalcOnLoad/.test(wb)) { wb = wb.replace(/<calcPr\b/, '<calcPr fullCalcOnLoad="1"'); zip.file('xl/workbook.xml', wb); } }
+    const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    return { bytes, perSheet, matched: [...matched], unused: [...by.keys()].filter((k) => !used.has(k)).map((k) => by.get(k)) };
+  };
+  function findRowNum(grid, row) {
+    for (const [r, cells] of grid.rows) {
+      for (const [, c] of cells) if (/^\d+$/.test(c.v) && parseInt(c.v, 10) === row.stt && c.num) {
+        const nameCell = [...cells.values()].find((x) => R.fold(x.v) === R.fold(row.name));
+        if (nameCell) return r;
+      }
+    }
+    return -1;
+  }
 
   if (typeof module !== 'undefined' && module.exports) module.exports = CP;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
@@ -11332,24 +12044,27 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 /* ==== 80_ui.js ==== */
-/* CHẤM TRẮC NGHIỆM — giao diện iPhone (M8). Bốn màn: Quét · Đáp án · Kết quả · Cài đặt; hai tab: Bộ GD – Vật lí / Phiếu tự chọn. */
+/* CHẤM TRẮC NGHIỆM — giao diện iPhone (M8), bản 0.1.1. Bốn màn: Quét · Đáp án · Kết quả · Cài đặt; hai tab: Bộ GD – Vật lí / Phiếu tự chọn.
+ * Mục 7 trên phiếu: từ 3 chữ số = SBD (thi theo phòng); 1–2 chữ số = STT trong lớp đang chấm (thi theo lớp). */
 (function (root) {
   'use strict';
-  const CP = root.CP, U = CP.util, ST = CP.store, SC = CP.scoring, K = CP.keys;
+  const CP = root.CP, U = CP.util, ST = CP.store, SC = CP.scoring, K = CP.keys, R = CP.roster, F = CP.fill, TH = CP.thumbs;
   const doc = root.document;
   const $ = (s, r) => (r || doc).querySelector(s);
   const h = U.esc;
-  const fmt = (n) => U.fmt(n, 2);
+  const fmt = (n) => U.fmt(n, 4);
   const TABNAME = { B: 'Bộ GD – Vật lí', T: 'Phiếu tự chọn' };
-  let S = null;            // trạng thái toàn app
-  let draft = null;        // bài đang xem/sửa trong màn hình kết quả
-  let cam = null;          // bộ điều khiển camera trực tiếp
-  let lastSource = 'file';
-  let lastFile = null;     // tệp .docx/.csv vừa tạo (chờ chia sẻ)
+  const HINT = {
+    NO_CORNERS: ['Không thấy đủ 4 ô vuông đen ở góc phiếu.', 'Lùi ra một chút để thấy đủ 4 góc, đặt phiếu phẳng, ánh sáng đều, không để bóng tay.'],
+    NO_LAYOUT: ['Không nhận ra mẫu phiếu.', 'Kiểm tra đúng tab (Bộ GD hay Phiếu tự chọn), chụp thẳng, thấy trọn cả tờ phiếu.'],
+    TOO_SMALL: ['Phiếu quá nhỏ trong ảnh.', 'Lại gần hơn hoặc chụp bằng ảnh có độ phân giải cao.'],
+  };
+  let S = null, draft = null, cam = null, lastSource = 'file', lastFile = null, retryFor = null, fillCtx = null;
 
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const tick = () => new Promise((r) => setTimeout(r, 40));
   const parseNum = (s) => { const v = parseFloat(String(s).replace(',', '.')); return isNaN(v) ? null : v; };
+  const tab = () => ST.tab(S.tab);
 
   function toast(msg, ms) {
     const t = $('#toast'); t.textContent = msg; t.hidden = false;
@@ -11363,7 +12078,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     m.hidden = false; m.scrollTop = 0; doc.body.style.overflow = 'hidden';
   }
   function setModalBody(body) { const mb = $('#modal .mb'); if (mb) mb.innerHTML = body; }
-  function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; doc.body.style.overflow = ''; draft = null; }
+  function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; doc.body.style.overflow = ''; draft = null; fillCtx = null; }
 
   /* ===================================================== màn hình chính */
   function render() {
@@ -11375,40 +12090,48 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $('#view').innerHTML = (views[S.view] || viewScan)();
   }
 
-  function keyStatus(tabId) {
-    const t = ST.tab(tabId), codes = Object.keys(t.keys).sort();
-    return codes;
+  function statusBadge(r) {
+    if (r.noKey) return '';
+    return r.status === 'manual' ? ' · ✍ chấm tay' : r.status === 'review' ? ' · ⚠ cần duyệt' : '';
   }
 
   function viewScan() {
-    const t = ST.tab(), cfg = ST.cfg(), codes = keyStatus(S.tab);
+    const t = tab(), cfg = ST.cfg(), codes = Object.keys(t.keys).sort(), cls = ST.classNames(S.tab);
     let o = '';
     if (!ST.isPersistent()) o += '<div class="note warn">Trình duyệt không lưu được dữ liệu (chế độ riêng tư?). Hãy xuất JSON sau mỗi lần nhập.</div>';
     if (!codes.length) o += '<div class="note warn">Chưa có đáp án. Vào mục <b>Đáp án</b> để quét QR hoặc nhập tay.</div>';
     else o += '<div class="note ok">Đã có đáp án ' + codes.length + ' mã đề: ' + codes.map(h).join(', ') + '</div>';
-    const nRoster = Object.keys(t.roster).length;
-    if (!nRoster) o += '<div class="note info">Chưa có danh sách học sinh: vẫn chấm được nhưng không hiện họ tên. Thêm ở <b>Cài đặt</b>.</div>';
-    o += '<label class="btn primary big" for="fileCam">📷 Chụp phiếu</label>';
+    if (!ST.rosterCount(S.tab)) o += '<div class="note info">Chưa có danh sách học sinh: vẫn chấm được nhưng không hiện họ tên. Thêm ở <b>Cài đặt → Danh sách học sinh</b>.</div>';
+    if (cls.length) {
+      o += '<div class="card"><label class="f" style="margin-top:0">Đang chấm lớp (dùng cho phiếu ghi STT 1–2 chữ số ở mục 7)</label><select data-act="lop"><option value="">(chưa chọn)</option>' +
+        cls.map((c) => '<option' + (R.fold(c) === R.fold(t.activeLop || '') ? ' selected' : '') + '>' + h(c) + '</option>').join('') + '</select></div>';
+    }
+    const np = t.pending.length;
+    if (np) o += '<div class="note warn">Có <b>' + np + '</b> phiếu chưa đọc được, cần chụp lại hoặc chấm tay. <button class="btn small" style="display:inline-flex;margin-left:6px" data-act="pending">Xử lý</button></div>';
+    o += '<label class="btn primary big" for="fileCam" data-act="scan-new">📷 Chụp phiếu</label>';
     if (CP.camera.supported()) o += '<button class="btn big" data-act="live">🎥 Camera tự chụp</button>';
-    o += '<label class="btn" for="filePick">🖼️ Chọn ảnh có sẵn</label>';
+    o += '<div class="grid2"><label class="btn" for="filePick" data-act="scan-new">🖼️ Chọn ảnh có sẵn</label><button class="btn" data-act="manual-sheet">✍️ Chấm tay một bài</button></div>';
+    const miss = ST.missing(S.tab).length, nrev = t.results.filter((r) => r.status === 'review').length;
     o += '<div class="card"><div class="kv"><span>Mẫu đọc</span><span>' + (S.tab === 'B' ? 'Phiếu 2025, SBD 8 số, mã đề 4 số' : 'Phiếu tự chọn, mã đề 3 số') + '</span></div>' +
       '<div class="kv"><span>Số câu</span><span>P1 ' + cfg.n1 + ' · P2 ' + cfg.n2 + ' · P3 ' + cfg.n3 + '</span></div>' +
-      '<div class="kv"><span>Đã chấm</span><span><b>' + t.results.length + '</b> bài</span></div></div>';
+      '<div class="kv"><span>Đã chấm</span><span><b>' + t.results.length + '</b> bài' + (nrev ? ' (<span style="color:var(--warn)">' + nrev + ' cần duyệt</span>)' : '') + '</span></div>' +
+      (ST.rosterCount(S.tab) ? '<div class="kv"><span>Còn thiếu</span><span><b>' + miss + '</b> học sinh <button class="btn small" style="display:inline-flex;margin-left:6px" data-act="missing">Xem</button></span></div>' : '') + '</div>';
     const last = t.results.slice(-3).reverse();
     if (last.length) {
       o += '<h3>Vừa chấm</h3><div class="list">';
       last.forEach((r) => {
         const ev = ST.evaluate(S.tab, r);
-        o += '<button class="item" data-act="open" data-id="' + r.id + '"><div class="n"><b>' + h(ST.nameOf(S.tab, r) || ('SBD ' + r.sbd)) + '</b><small>SBD ' + h(r.sbd) + ' · mã đề ' + h(r.made) + '</small></div><div class="s' + (ev.sc ? '' : ' none') + '">' + (ev.sc ? fmt(ev.tong) : 'chưa có ĐA') + '</div></button>';
+        o += '<button class="item" data-act="open" data-id="' + r.id + '"><div class="n"><b>' + h(ST.nameOf(S.tab, r) || ST.idLabel(r)) + '</b><small>' + h(ST.idLabel(r)) + (ST.lopOf(S.tab, r) ? ' · ' + h(ST.lopOf(S.tab, r)) : '') + ' · mã đề ' + h(r.made) + h(statusBadge({ noKey: !ev.sc, status: r.status })) + '</small></div><div class="s' + (ev.sc ? '' : ' none') + '">' + (ev.sc ? fmt(ev.tong) : 'chưa có ĐA') + '</div></button>';
       });
       o += '</div>';
     }
+    o += '<h3>Mục 7 trên phiếu</h3><div class="card" style="font-size:14px;color:var(--mut)">Từ <b>3 chữ số</b> trở lên = số báo danh (thi theo phòng). <b>1–2 chữ số</b> = số thứ tự trong lớp (thi theo lớp): chọn đúng lớp ở trên trước khi chụp.</div>';
     o += '<h3>Mẹo chụp</h3><div class="card" style="font-size:14px;color:var(--mut)">Đặt phiếu phẳng, máy song song mặt giấy, thấy đủ 4 ô vuông đen ở góc. Ánh sáng đều, không flash, không để bóng tay đổ lên phiếu.</div>';
     return o;
   }
 
   function viewKeys() {
-    const t = ST.tab(), cfg = ST.cfg(), codes = keyStatus(S.tab);
+    const t = tab(), cfg = ST.cfg(), codes = Object.keys(t.keys).sort();
     let o = '<h2>Đáp án — ' + TABNAME[S.tab] + '</h2>';
     o += '<div class="grid2"><button class="btn primary" data-act="qrcam">📷 Quét QR đáp án</button><label class="btn" for="fileQr">🖼️ QR từ ảnh</label></div>';
     o += '<div class="grid2"><button class="btn" data-act="manual">✍️ Nhập tay</button><button class="btn" data-act="paste">📋 Dán mã / đường dẫn</button></div>';
@@ -11417,7 +12140,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     codes.forEach((c) => {
       const k = t.keys[c], err = SC.validateKey(cfg, k);
       o += '<div class="card"><div class="row"><div style="flex:1"><b style="font-size:22px">Mã đề ' + h(c) + '</b><div class="meta" style="margin:2px 0 0">P1 ' + k.p1.length + ' · P2 ' + k.p2.length + ' · P3 ' + k.p3.length + (err.length ? ' · <span style="color:var(--bad)">chưa khớp cấu hình</span>' : ' · <span style="color:var(--ok)">hợp lệ</span>') + '</div></div>' +
-        '<button class="btn small" style="flex:0 0 auto" data-act="keyedit" data-m="' + h(c) + '">Xem/Sửa</button><button class="btn small danger" style="flex:0 0 auto" data-act="keydel" data-m="' + h(c) + '">Xóa</button></div></div>';
+        '<button class="btn small" style="flex:0 0 auto" data-act="keyedit" data-m="' + h(c) + '">Xem/Sửa</button><button class="btn small danger" style="flex:0 0 auto" data-act="keydel" data-m="' + h(c) + '">Xóa</button></div>' +
+        (err.length ? '<div class="note bad" style="margin:8px 0 0">' + err.map(h).join('<br>') + '<br>Đáp án này chưa được dùng để chấm. Sửa số câu ở Cài đặt hoặc nhập lại đáp án đúng.</div>' : '') + '</div>';
     });
     o += '<div class="foot-note">Đáp án là thông tin nhạy cảm: QR chỉ in trên tờ của giáo viên.</div>';
     return o;
@@ -11427,14 +12151,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const rows = ST.rows(S.tab), cfg = ST.cfg(), good = rows.filter((r) => !r.noKey);
     const mp = SC.maxPoints(cfg);
     const st = SC.summarize(good.map((r) => ({ tong: r.tong, tongMax: S.tab === 'T' ? mp.total : mp.tn })));
+    const miss = ST.missing(S.tab).length;
     let o = '<h2>Kết quả — ' + TABNAME[S.tab] + '</h2>';
     o += '<div class="stat"><div><b>' + rows.length + '</b><small>bài</small></div><div><b>' + (good.length ? fmt(st.mean) : '—') + '</b><small>TB</small></div><div><b>' + (good.length ? fmt(st.max) : '—') + '</b><small>cao nhất</small></div><div><b>' + (good.length ? fmt(st.min) : '—') + '</b><small>thấp nhất</small></div></div>';
     o += '<button class="btn primary" data-act="docx"' + (rows.length ? '' : ' disabled') + '>📄 Xuất kết quả .docx</button>';
-    o += '<div class="grid2"><button class="btn" data-act="csv"' + (rows.length ? '' : ' disabled') + '>📊 Xuất CSV (Excel)</button><button class="btn" data-act="backup">💾 Sao lưu JSON</button></div>';
+    o += '<div class="grid2"><button class="btn" data-act="fill-docx"' + (rows.length ? '' : ' disabled') + '>📝 Điền điểm vào DS phòng thi (.docx)</button><button class="btn" data-act="fill-xlsx"' + (rows.length ? '' : ' disabled') + '>📊 Điền điểm vào sổ điểm (.xlsx)</button></div>';
+    o += '<div class="grid2"><button class="btn" data-act="csv"' + (rows.length ? '' : ' disabled') + '>CSV (Excel)</button><button class="btn" data-act="backup">💾 Sao lưu JSON</button></div>';
+    if (miss) o += '<button class="btn" data-act="missing">👥 Còn thiếu ' + miss + ' học sinh chưa có bài</button>';
     o += '<div class="list">';
     rows.forEach((r) => {
-      const nf = r.flags.filter((f) => f.severity !== 'info').length;
-      o += '<button class="item" data-act="open" data-id="' + r.id + '"><div class="n"><b>' + h(r.ten || '(chưa có tên)') + '</b><small>SBD ' + h(r.sbd) + ' · mã đề ' + h(r.made) + (nf ? ' · ⚠ ' + nf + ' cờ' : '') + '</small></div><div class="s' + (r.noKey ? ' none' : '') + '">' + (r.noKey ? 'chưa có ĐA' : fmt(r.tong)) + '</div></button>';
+      o += '<button class="item" data-act="open" data-id="' + r.id + '"><div class="n"><b>' + h(r.ten || '(chưa có trong danh sách)') + '</b><small>' + h(r.idLabel) + (r.lop ? ' · ' + h(r.lop) : '') + ' · mã đề ' + h(r.made) + h(statusBadge(r)) + '</small></div><div class="s' + (r.noKey ? ' none' : '') + '">' + (r.noKey ? 'chưa có ĐA' : fmt(r.tong)) + '</div></button>';
     });
     o += '</div>';
     if (!rows.length) o += '<div class="note info">Chưa có bài nào. Sang mục Quét.</div>';
@@ -11443,7 +12169,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   function viewSettings() {
-    const t = ST.tab(), cfg = ST.cfg(), mp = SC.maxPoints(cfg), nRoster = Object.keys(t.roster).length;
+    const t = tab(), cfg = ST.cfg(), mp = SC.maxPoints(cfg), nl = t.lists.length, n = ST.rosterCount(S.tab), stt = t.stats;
     let o = '<h2>Cài đặt — ' + TABNAME[S.tab] + '</h2>';
     o += '<h3>Thông tin kỳ thi (ghi vào .docx)</h3><div class="card">' +
       ['kyThi:Kỳ thi', 'mon:Môn', 'lop:Lớp', 'ngay:Ngày thi'].map((p) => { const k = p.split(':')[0]; return '<label class="f">' + p.split(':')[1] + '</label><input type="text" data-act="info" data-k="' + k + '" value="' + h(t.info[k] || '') + '">'; }).join('') + '</div>';
@@ -11452,20 +12178,23 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       o += '<div class="kv"><span>Phần I</span><span>18 câu × 0,25 = ' + fmt(mp.p1) + '</span></div><div class="kv"><span>Phần II</span><span>4 câu, thang Bộ (1/2/3/4 ý = 0,1/0,25/0,5/1) = ' + fmt(mp.p2) + '</span></div><div class="kv"><span>Phần III</span><span>6 câu × 0,25 = ' + fmt(mp.p3) + '</span></div><div class="kv"><span>Tổng</span><span><b>' + fmt(mp.tn) + '</b></span></div>' +
         '<div class="note info" style="margin:10px 0 0">Điểm đã khóa theo cấu trúc Bộ. Thang điểm lấy từ nguồn báo chí, chưa đối chiếu văn bản gốc.</div>';
     } else {
-      const num = (k, lab, st) => '<label class="f">' + lab + '</label><input type="text" inputmode="decimal" data-act="cfg" data-k="' + k + '" value="' + cfg[k] + '">';
+      const num = (k, lab) => '<label class="f">' + lab + '</label><input type="text" inputmode="decimal" data-act="cfg" data-k="' + k + '" value="' + String(cfg[k]).replace('.', ',') + '">';
       o += '<div class="grid3"><div>' + num('n1', 'Số câu P1') + '</div><div>' + num('n2', 'Số câu P2') + '</div><div>' + num('n3', 'Số câu P3') + '</div></div>';
-      o += '<div class="grid2"><div>' + num('p1Pt', 'Điểm/câu P1', 0.05) + '</div><div>' + num('p3Pt', 'Điểm/câu P3', 0.05) + '</div></div>';
+      o += '<div class="grid2"><div>' + num('p1Pt', 'Điểm/câu P1') + '</div><div>' + num('p3Pt', 'Điểm/câu P3') + '</div></div>';
       o += '<label class="f">Cách tính Phần II</label><select data-act="cfg" data-k="p2Mode"><option value="bo"' + (cfg.p2Mode === 'bo' ? ' selected' : '') + '>Thang Bộ (1/2/3/4 ý đúng = 0,1/0,25/0,5/1)</option><option value="ymenh"' + (cfg.p2Mode === 'ymenh' ? ' selected' : '') + '>0,25 điểm mỗi mệnh đề đúng</option></select>';
-      if (cfg.p2Mode === 'ymenh') o += num('p2PtYmenh', 'Điểm mỗi mệnh đề', 0.05);
-      o += num('tlMax', 'Điểm tối đa Phần IV (tự luận, nhập tay)', 0.25);
+      if (cfg.p2Mode === 'ymenh') o += num('p2PtYmenh', 'Điểm mỗi mệnh đề');
+      o += num('tlMax', 'Điểm tối đa Phần IV (tự luận, nhập tay)');
       o += '<div class="chk"><input type="checkbox" data-act="cfg" data-k="p3Numeric"' + (cfg.p3Numeric ? ' checked' : '') + '><span>Phần III: coi 3,40 bằng 3,4 (số tương đương)</span></div>';
       o += '<div class="note info" style="margin:10px 0 0">Điểm tối đa: P1 ' + fmt(mp.p1) + ' · P2 ' + fmt(mp.p2) + ' · P3 ' + fmt(mp.p3) + ' · Tự luận ' + fmt(mp.tl) + ' · <b>Tổng ' + fmt(mp.total) + '</b></div>';
     }
     o += '</div>';
-    o += '<h3>Danh sách học sinh</h3><div class="card"><div class="kv"><span>Số học sinh</span><span><b>' + nRoster + '</b></span></div><div class="grid2" style="margin-top:10px"><button class="btn small" style="width:100%" data-act="roster-paste">Dán / nhập</button><label class="btn small" style="width:100%" for="fileRoster">Chọn tệp CSV</label></div>' +
-      (nRoster ? '<button class="btn small danger" style="width:100%;margin-top:8px" data-act="roster-clear">Xóa danh sách</button>' : '') + '<div class="meta" style="margin:8px 0 0;font-size:13px">Mỗi dòng: số báo danh, họ tên. Dán từ Excel được.</div></div>';
+    o += '<h3>Danh sách học sinh</h3><div class="card"><div class="kv"><span>Danh sách đã nhập</span><span><b>' + nl + '</b> (' + n + ' học sinh)</span></div>' +
+      '<button class="btn" style="margin-top:10px" data-act="roster">👥 Quản lý danh sách (.xlsx, .docx, dán)</button>' +
+      '<div class="meta" style="margin:4px 0 0;font-size:13px">Danh sách chỉ nằm trên máy này, không gửi đi đâu. Đừng đưa danh sách lên kho GitHub công khai.</div></div>';
+    o += '<h3>Thống kê chụp</h3><div class="card"><div class="kv"><span>Đạt ngay</span><span>' + (stt.ok || 0) + '</span></div><div class="kv"><span>Cần duyệt</span><span>' + (stt.review || 0) + '</span></div><div class="kv"><span>Chấm tay</span><span>' + (stt.manual || 0) + '</span></div><div class="kv"><span>Không đọc được (chụp lại)</span><span>' + (stt.retry || 0) + '</span></div>' +
+      Object.keys(stt.reasons || {}).map((k) => '<div class="kv"><span>— ' + h(k) + '</span><span>' + stt.reasons[k] + '</span></div>').join('') + '</div>';
     o += '<h3>Dữ liệu</h3><div class="grid2"><button class="btn" data-act="backup">💾 Sao lưu JSON</button><label class="btn" for="fileJson">♻️ Khôi phục</label></div>';
-    o += '<div class="foot-note">Chấm trắc nghiệm · bản thử 0.1 · © thầy Lê Hùng — THPT Bắc Sơn<br>Dữ liệu chỉ lưu trên máy này, không gửi đi đâu.</div>';
+    o += '<div class="foot-note">Chấm trắc nghiệm · bản 0.1.1 · © thầy Lê Hùng — THPT Bắc Sơn<br>Dữ liệu chỉ lưu trên máy này, không gửi đi đâu.</div>';
     return o;
   }
 
@@ -11502,26 +12231,60 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const id = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
     await tick();
     const res = CP.omr.process(id, { layouts: CP.layouts, layoutIds: tabId === 'B' ? ['CD'] : ['A', 'B'], active: { p1: cfg.n1, p2: cfg.n2, p3: cfg.n3 } });
-    if (!res.ok) {
-      openModal('Không đọc được phiếu', '<div class="note bad">' + h(res.message || res.error) + '</div><label class="btn primary" for="fileCam">📷 Chụp lại</label><button class="btn" data-act="close">Đóng</button>');
-      return res;
-    }
+    if (!res.ok) return handleFail(tabId, res, canvas);
     draft = makeDraft(tabId, res, canvas);
     openModal('Kết quả phiếu', cardHtml(draft));
     drawOverlay(draft);
     return res;
   }
+
+  /** Phiếu không đọc được: vào hàng đợi, hiện gợi ý theo nguyên nhân. */
+  function handleFail(tabId, res, canvas) {
+    const t = ST.tab(tabId);
+    let item = retryFor ? t.pending.find((p) => p.id === retryFor) : null;
+    if (item) { item.attempts++; item.ts = Date.now(); item.reason = res.error; }
+    else { item = { id: uid(), ts: Date.now(), reason: res.error, attempts: 1 }; t.pending.push(item); }
+    retryFor = null;
+    ST.bump(tabId, 'retry', res.error);
+    ST.save(true);
+    TH.put('p' + item.id, TH.make(canvas));
+    openModal('Chưa đọc được phiếu', failHtml(item));
+    return res;
+  }
+  function failHtml(item) {
+    const hint = HINT[item.reason] || ['Không đọc được phiếu.', 'Chụp lại rõ hơn.'];
+    return '<div class="note bad"><b>' + h(hint[0]) + '</b><br>' + h(hint[1]) + (item.attempts > 1 ? '<br>Đã thử ' + item.attempts + ' lần.' : '') + '</div>' +
+      '<label class="btn primary big" for="fileCam" data-act="retry" data-id="' + item.id + '">📷 Chụp lại</label>' +
+      (CP.camera.supported() ? '<button class="btn" data-act="retry-live" data-id="' + item.id + '">🎥 Camera tự chụp</button>' : '') +
+      '<div class="grid2"><button class="btn" data-act="manual-pending" data-id="' + item.id + '">✍️ Chấm tay</button><button class="btn" data-act="close">Để sau</button></div>' +
+      '<div class="foot-note">Phiếu này nằm trong hàng đợi "cần chụp lại" cho tới khi thầy chụp lại thành công hoặc chấm tay.</div>';
+  }
+
   function makeDraft(tabId, res, canvas) {
-    const cfg = ST.cfg(tabId), f = res.fields;
-    return {
-      id: uid(), ts: Date.now(), tabId, sbd: f.sbd.str, made: f.made.str, layout: res.layoutId, tl: null, name: '', fixed: {}, isNew: true, source: lastSource,
+    const cfg = ST.cfg(tabId), f = res.fields, t = ST.tab(tabId);
+    const digits = String(f.sbd.str || '').replace(/[^0-9]/g, '');
+    let mode = 'none', sbd = '', stt = null;
+    if (digits.length >= 3) { mode = 'sbd'; sbd = digits; }
+    else if (digits.length >= 1) { mode = 'stt'; stt = parseInt(digits, 10); }
+    const d = {
+      id: uid(), ts: Date.now(), tabId, mode, sbd, stt, lop: mode === 'stt' ? (t.activeLop || '') : '', made: f.made.str, layout: res.layoutId, tl: null, name: '', fixed: {}, isNew: true, source: lastSource, manual: false,
       ans: {
         p1: f.p1.slice(0, cfg.n1).map((x) => (x.ans === '*' ? '' : x.ans)),
         p2: f.p2.slice(0, cfg.n2).map((r) => r.map((x) => (x.ans === '*' ? '' : x.ans))),
         p3: f.p3.slice(0, cfg.n3).map((x) => (x.state === 'bad' ? '' : x.ans)),
       },
       flags: res.flags.map((x) => ({ field: x.field, q: x.q, type: x.type, severity: x.severity, text: x.text })),
-      omr: { bubbles: res.bubbles }, canvas,
+      omr: { bubbles: res.bubbles }, canvas, retryFor: retryFor || null,
+    };
+    retryFor = null;
+    return d;
+  }
+  function newManualDraft(tabId, retryId) {
+    const cfg = ST.cfg(tabId), t = ST.tab(tabId), codes = Object.keys(t.keys);
+    return {
+      id: uid(), ts: Date.now(), tabId, mode: 'none', sbd: '', stt: null, lop: t.activeLop || '', made: codes.length === 1 ? codes[0] : '', layout: '', tl: null, name: '', fixed: {}, isNew: true, source: 'manual', manual: true,
+      ans: { p1: Array(cfg.n1).fill(''), p2: Array.from({ length: cfg.n2 }, () => ['', '', '', '']), p3: Array(cfg.n3).fill('') },
+      flags: [{ field: 'sheet', q: 0, type: 'manual', severity: 'info', text: 'Chấm tay' }], omr: { bubbles: [] }, canvas: null, retryFor: retryId || null,
     };
   }
 
@@ -11534,34 +12297,57 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
   const dd = (a) => (a === 'D' ? 'Đ' : a || '·');
 
+  function identHtml(d, ev) {
+    const t = ST.tab(d.tabId), lk = ST.lookup(d.tabId, d), cls = ST.classNames(d.tabId);
+    const bad = 'style="border-color:var(--bad)"';
+    let o = '<div class="seg2"><button class="' + (d.mode === 'sbd' ? 'on' : '') + '" data-act="setmode" data-v="sbd">Số báo danh</button><button class="' + (d.mode === 'stt' ? 'on' : '') + '" data-act="setmode" data-v="stt">STT trong lớp</button></div>';
+    o += '<div class="meta">';
+    if (d.mode === 'stt') {
+      o += 'STT <input class="inl made" data-act="stt" inputmode="numeric" value="' + (d.stt == null ? '' : d.stt) + '"' + (!(d.stt >= 1) ? ' ' + bad : '') + '>';
+      if (cls.length) o += ' · Lớp <select class="inl" data-act="dlop"><option value="">(chưa chọn)</option>' + cls.map((c) => '<option' + (R.fold(c) === R.fold(d.lop || '') ? ' selected' : '') + '>' + h(c) + '</option>').join('') + '</select>';
+    } else {
+      o += 'SBD <input class="inl sbd" data-act="sbd" inputmode="numeric" value="' + h(d.sbd) + '"' + (!/^\d{3,}$/.test(d.sbd) ? ' ' + bad : '') + '>';
+    }
+    o += ' · Mã đề <input class="inl made" data-act="made" inputmode="numeric" value="' + h(d.made) + '"' + (!/^\d+$/.test(d.made) || !ev.key ? ' ' + bad : '') + '></div>';
+    return { html: o, lk, near: d.mode === 'sbd' && !lk.found && /^\d{3,}$/.test(d.sbd) ? R.nearBySbd(t.lists, d.sbd) : [] };
+  }
+
   function cardHtml(d) {
-    const tabId = d.tabId, cfg = ST.cfg(tabId), ev = ST.evaluate(tabId, d), name = ST.nameOf(tabId, d), mp = ev.max, sc = ev.sc, fs = flagSet(d);
-    const sbdBad = !/^\d+$/.test(d.sbd), madeBad = !/^\d+$/.test(d.made);
+    const tabId = d.tabId, cfg = ST.cfg(tabId), ev = ST.evaluate(tabId, d), mp = ev.max, sc = ev.sc, fs = flagSet(d), t = ST.tab(tabId);
+    const idn = identHtml(d, ev), lk = idn.lk, name = d.name || lk.name;
     let o = '<div class="card">';
     if (name) o += '<div class="name">' + h(name) + '</div>';
+    else if (lk.ambiguous) o += '<div class="name miss">SBD trùng ở nhiều danh sách</div>';
+    else if (d.mode === 'none') o += '<div class="name miss">Nhập số báo danh hoặc STT</div>';
+    else if (d.mode === 'stt' && ST.classNames(tabId).length && !d.lop) o += '<div class="name miss">Chưa chọn lớp</div>';
     else o += '<div class="name miss">Chưa có trong danh sách</div><div class="row" style="margin-top:8px"><input id="nm" type="text" placeholder="Nhập họ tên (không bắt buộc)" value="' + h(d.name || '') + '"><button class="btn small" style="flex:0 0 auto" data-act="setname">Lưu tên</button></div>';
-    o += '<div class="meta">SBD <input class="inl sbd" data-act="sbd" inputmode="numeric" value="' + h(d.sbd) + '"' + (sbdBad || fs.sbd ? ' style="border-color:var(--bad)"' : '') + '> · Mã đề <input class="inl made" data-act="made" inputmode="numeric" value="' + h(d.made) + '"' + (madeBad || fs.made || !ev.key ? ' style="border-color:var(--bad)"' : '') + '></div>';
-    o += '<div class="tiles">' +
-      [['Phần 1', 'p1'], ['Phần 2', 'p2'], ['Phần 3', 'p3']].map((p) => '<div class="tile"><div class="l">' + p[0] + '</div><div class="v">' + (sc ? fmt(sc[p[1]].pts) : '—') + '</div><div class="m">/ ' + fmt(mp[p[1]]) + '</div></div>').join('') + '</div>';
-    o += '<div class="total' + (sc ? '' : ' none') + '"><div class="l">TỔNG ĐIỂM' + (tabId === 'T' ? ' (trắc nghiệm + tự luận)' : '') + '</div><div class="v">' + (sc ? fmt(ev.tong) : '—') + '</div><div class="m">' + (sc ? 'trên ' + fmt(tabId === 'T' ? mp.total : mp.tn) : 'Chưa có đáp án mã đề ' + h(d.made)) + '</div></div>';
-    if (tabId === 'T') o += '<label class="f">Điểm tự luận (nhập tay, tối đa ' + fmt(cfg.tlMax) + ')</label><input type="text" inputmode="decimal" data-act="tl" value="' + (d.tl == null ? '' : d.tl) + '">';
+    if (lk.found && (lk.lop || d.lop) && d.mode === 'sbd') o += '<div class="meta" style="margin:2px 0 0">Lớp ' + h(lk.lop) + '</div>';
+    o += idn.html;
+    idn.near.forEach((n) => { o += '<button class="btn small" style="margin:0 6px 6px 0;display:inline-flex" data-act="usesbd" data-v="' + h(n.sbd) + '">Có phải ' + h(n.sbd) + ' — ' + h(n.name) + '?</button>'; });
+    o += '<div class="tiles">' + [['Phần 1', 'p1'], ['Phần 2', 'p2'], ['Phần 3', 'p3']].map((p) => '<div class="tile"><div class="l">' + p[0] + '</div><div class="v">' + (sc ? fmt(sc[p[1]].pts) : '—') + '</div><div class="m">/ ' + fmt(mp[p[1]]) + '</div></div>').join('') + '</div>';
+    o += '<div class="total' + (sc ? '' : ' none') + '"><div class="l">TỔNG ĐIỂM' + (tabId === 'T' && cfg.tlMax > 0 ? ' (trắc nghiệm + tự luận)' : '') + '</div><div class="v">' + (sc ? fmt(ev.tong) : '—') + '</div><div class="m">' + (sc ? 'trên ' + fmt(tabId === 'T' ? mp.total : mp.tn) : (ev.keyErr && ev.keyErr.length ? 'Đáp án mã đề ' + h(d.made) + ' sai số câu (xem mục Đáp án)' : 'Chưa có đáp án mã đề ' + h(d.made))) + '</div></div>';
+    if (tabId === 'T' && cfg.tlMax > 0) o += '<label class="f">Điểm tự luận (nhập tay, tối đa ' + fmt(cfg.tlMax) + ')</label><input type="text" inputmode="decimal" data-act="tl" value="' + (d.tl == null ? '' : String(d.tl).replace('.', ',')) + '">';
     const unresolved = Object.keys(fs).map((k) => fs[k]);
-    if (sbdBad || madeBad || !ev.key || unresolved.length) {
-      o += '<div style="margin-top:12px">';
-      if (sbdBad) o += '<span class="pill err">SBD chưa đủ/đúng</span>';
-      if (madeBad) o += '<span class="pill err">Mã đề chưa đọc được</span>';
-      else if (!ev.key) o += '<span class="pill err">Mã đề ' + h(d.made) + ' chưa có đáp án</span>';
-      unresolved.forEach((f) => { o += '<span class="pill' + (f.severity === 'error' ? ' err' : '') + '">' + h(f.text) + '</span>'; });
-      o += '</div>';
+    const pills = [];
+    if (d.mode === 'none') pills.push('<span class="pill err">Chưa có SBD hoặc STT</span>');
+    if (d.mode === 'sbd' && !/^\d{3,}$/.test(d.sbd)) pills.push('<span class="pill err">SBD cần từ 3 chữ số</span>');
+    if (d.mode === 'stt') {
+      const cl = d.lop ? t.lists.find((l) => l.kind === 'class' && R.fold(l.name) === R.fold(d.lop)) : null;
+      if (cl && d.stt > cl.rows.length) pills.push('<span class="pill err">STT lớn hơn số học sinh lớp ' + h(d.lop) + ' (' + cl.rows.length + ')</span>');
+      if (ST.classNames(tabId).length && !d.lop) pills.push('<span class="pill err">Chưa chọn lớp</span>');
     }
+    if (!/^\d+$/.test(d.made)) pills.push('<span class="pill err">Mã đề chưa đọc được</span>');
+    else if (!ev.key) pills.push('<span class="pill err">Mã đề ' + h(d.made) + ' chưa có đáp án</span>');
+    else if (ev.keyErr && ev.keyErr.length) pills.push('<span class="pill err">' + h(ev.keyErr[0]) + '</span>');
+    unresolved.forEach((f) => pills.push('<span class="pill' + (f.severity === 'error' ? ' err' : '') + '">' + h(f.text) + '</span>'));
+    if (pills.length) o += '<div style="margin-top:12px">' + pills.join('') + '</div>';
     o += '</div>';
 
-    // chi tiết đáp án
-    o += '<details' + (unresolved.length ? ' open' : '') + '><summary>Chi tiết đáp án (chạm ô để sửa)</summary>';
+    o += '<details' + (unresolved.length || d.manual ? ' open' : '') + '><summary>Chi tiết đáp án (chạm ô để sửa)</summary>';
     if (cfg.n1) {
       o += '<h3>Phần I</h3><div class="cells">';
       d.ans.p1.forEach((a, i) => {
-        const k = ev.key ? ev.key.p1[i] : '', cls = ev.key ? (a === k ? ' ok' : ' bad') : '';
+        const k = ev.key && !ev.keyErr.length ? ev.key.p1[i] : '', cls = k ? (a === k ? ' ok' : ' bad') : '';
         o += '<button class="cell' + cls + (fs['p1-' + i] ? ' flag' : '') + '" data-act="cyc" data-f="p1" data-q="' + i + '"><b>' + (i + 1) + '</b><span>' + (a || '·') + '</span></button>';
       });
       o += '</div>';
@@ -11571,7 +12357,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       d.ans.p2.forEach((row, q) => {
         o += '<div class="p2row"><div class="lbl">Câu ' + (q + 1) + '</div>';
         row.forEach((a, i) => {
-          const k = ev.key ? ev.key.p2[q][i] : '', cls = ev.key ? (a === k ? ' ok' : ' bad') : '';
+          const k = ev.key && !ev.keyErr.length ? ev.key.p2[q][i] : '', cls = k ? (a === k ? ' ok' : ' bad') : '';
           o += '<button class="cell' + cls + (fs['p2-' + (q * 4 + i)] ? ' flag' : '') + '" data-act="cyc" data-f="p2" data-q="' + q + '" data-i="' + i + '"><b>' + 'abcd'[i] + '</b><span>' + dd(a) + '</span></button>';
         });
         o += '</div>';
@@ -11580,26 +12366,32 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (cfg.n3) {
       o += '<h3>Phần III (đáp số)</h3>';
       d.ans.p3.forEach((a, q) => {
-        const k = ev.key ? ev.key.p3[q] : '', it = sc ? sc.p3.items[q] : null, cls = it ? (it.ok ? ' ok' : ' bad') : '';
-        o += '<div class="p3row' + cls + (fs['p3-' + q] ? ' flag' : '') + '"><div class="lbl">Câu ' + (q + 1) + '</div><input type="text" inputmode="text" data-act="p3" data-q="' + q + '" value="' + h(a) + '"><div class="k">' + (ev.key ? 'ĐA: ' + h(k) : '') + '</div></div>';
+        const k = ev.key && !ev.keyErr.length ? ev.key.p3[q] : '', it = sc ? sc.p3.items[q] : null, cls = it ? (it.ok ? ' ok' : ' bad') : '';
+        o += '<div class="p3row' + cls + (fs['p3-' + q] ? ' flag' : '') + '"><div class="lbl">Câu ' + (q + 1) + '</div><input type="text" inputmode="text" data-act="p3" data-q="' + q + '" value="' + h(a) + '"><div class="k">' + (k ? 'ĐA: ' + h(k) : '') + '</div></div>';
       });
     }
     o += '</details>';
     if (d.canvas) o += '<details><summary>Ảnh đối chiếu</summary><canvas id="ov"></canvas><div class="meta" style="font-size:13px">Xanh: đúng · Đỏ: sai · Cam: tô mờ · Vòng xanh nét đứt: đáp án đúng ở câu sai</div></details>';
+    else if (!d.isNew || d.manual) o += '<details id="thumbbox" hidden><summary>Ảnh phiếu đã lưu</summary><img id="thumbimg" alt="" style="width:100%;border-radius:10px"></details>';
     o += '<div style="margin-top:14px">';
     if (d.isNew) o += '<button class="btn primary big" data-act="savenext">Lưu và chấm bài tiếp</button><div class="grid2"><button class="btn" data-act="save">Lưu</button><button class="btn danger" data-act="discard">Bỏ bài này</button></div>';
     else o += '<button class="btn primary" data-act="save">Lưu thay đổi</button><div class="grid2"><button class="btn danger" data-act="del">Xóa bài</button><button class="btn" data-act="close">Đóng</button></div>';
     o += '</div>';
     return o;
   }
-  function refreshCard() { if (draft) { setModalBody(cardHtml(draft)); drawOverlay(draft); } }
+  function refreshCard() { if (draft) { setModalBody(cardHtml(draft)); drawOverlay(draft); loadThumb(draft); } }
+  function loadThumb(d) {
+    const box = $('#thumbbox'); if (!box || !d) return;
+    const key = d.thumbKey || (d.retryFor ? 'p' + d.retryFor : 'r' + d.id);
+    TH.get(key).then((u) => { if (u && $('#thumbimg')) { $('#thumbimg').src = u; box.hidden = false; } });
+  }
 
   function drawOverlay(d) {
     const cv = $('#ov'); if (!cv || !d.canvas) return;
     const src = d.canvas, W = Math.min(800, ($('#modal .mb') || cv.parentElement).clientWidth - 24 || 340);
     cv.width = W; cv.height = Math.round(W * src.height / src.width);
     const x = cv.getContext('2d'); x.drawImage(src, 0, 0, cv.width, cv.height);
-    const k = cv.width / src.width, ev = ST.evaluate(d.tabId, d), key = ev.key;
+    const k = cv.width / src.width, ev = ST.evaluate(d.tabId, d), key = ev.key && !ev.keyErr.length ? ev.key : null;
     const byId = {}; d.omr.bubbles.forEach((b) => { byId[b.id] = b; });
     function ring(b, col, dash) { x.setLineDash(dash || []); x.lineWidth = 2; x.strokeStyle = col; x.beginPath(); x.arc(b.x * k, b.y * k, Math.max(3, b.r * k * 1.15), 0, 6.283); x.stroke(); }
     d.omr.bubbles.forEach((b) => {
@@ -11618,20 +12410,27 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   function saveDraft(next) {
-    const d = draft, tabId = d.tabId, layout = CP.layouts[d.layout];
-    if (!/^\d+$/.test(d.sbd) || (layout && d.sbd.length !== layout.sbdCols)) { toast('Số báo danh chưa đủ ' + (layout ? layout.sbdCols : '') + ' chữ số. Sửa lại trước khi lưu.', 3800); return; }
+    const d = draft, tabId = d.tabId, t = ST.tab(tabId);
+    if (d.mode === 'sbd') { if (!/^\d{3,}$/.test(d.sbd)) { toast('Số báo danh phải có từ 3 chữ số. Sửa lại hoặc chuyển sang "STT trong lớp".', 4200); return; } }
+    else if (d.mode === 'stt') {
+      if (!(d.stt >= 1)) { toast('Nhập số thứ tự (STT) trong lớp.', 3500); return; }
+      if (ST.classNames(tabId).length && !d.lop) { toast('Chọn lớp trước khi lưu: STT chỉ có nghĩa trong một lớp.', 4200); return; }
+    } else { toast('Chưa có số báo danh hoặc STT. Nhập trước khi lưu.', 3800); return; }
     if (!/^\d+$/.test(d.made)) { toast('Mã đề chưa hợp lệ. Sửa lại trước khi lưu.', 3800); return; }
-    const t = ST.tab(tabId);
-    const dup = t.results.find((r) => r.sbd === d.sbd && r.id !== d.id);
-    if (dup && !root.confirm('SBD ' + d.sbd + ' đã có bài chấm. Thay thế bài cũ?')) return;
-    if (dup) t.results = t.results.filter((r) => r.id !== dup.id);
-    const rec = { id: d.id, ts: d.ts, sbd: d.sbd, made: d.made, layout: d.layout, ans: d.ans, tl: d.tl, name: d.name || '', flags: d.flags, fixed: d.fixed };
-    const i = t.results.findIndex((r) => r.id === rec.id);
-    if (i >= 0) t.results[i] = rec; else t.results.push(rec);
+    const rec = { id: d.id, ts: d.ts, mode: d.mode, sbd: d.mode === 'sbd' ? d.sbd : '', stt: d.mode === 'stt' ? d.stt : null, lop: d.mode === 'stt' ? d.lop : '', made: d.made, layout: d.layout, ans: d.ans, tl: d.tl, name: d.name || '', flags: d.flags, fixed: d.fixed };
+    const k = ST.identKey(rec);
+    const dup = t.results.find((r) => ST.identKey(r) === k && r.id !== d.id);
+    if (dup && !root.confirm((d.mode === 'stt' ? 'STT ' + d.stt + ' lớp ' + d.lop : 'SBD ' + d.sbd) + ' đã có bài chấm. Thay thế bài cũ?')) return;
+    if (dup) { t.results = t.results.filter((r) => r.id !== dup.id); TH.del('r' + dup.id); }
+    rec.status = d.manual ? 'manual' : Object.keys(flagSet(d)).length ? 'review' : 'ok';
+    ST.addResult(tabId, rec);
+    if (d.isNew) ST.bump(tabId, rec.status);
+    if ((rec.status === 'review' || rec.status === 'manual') && d.canvas) TH.put('r' + rec.id, TH.make(d.canvas));
+    if (d.retryFor) { t.pending = t.pending.filter((p) => p.id !== d.retryFor); TH.del('p' + d.retryFor); }
     ST.save(true);
-    const src = d.source;
+    const src = d.source, label = ST.nameOf(tabId, rec) || ST.idLabel(rec);
     closeModal(); render();
-    toast('Đã lưu ' + (ST.nameOf(tabId, rec) || 'SBD ' + rec.sbd));
+    toast('Đã lưu ' + label);
     if (next && src === 'live' && CP.camera.supported()) openLive();
   }
 
@@ -11681,7 +12480,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
     }
     const errs = SC.validateKey(cfg, key);
-    if (tabId === 'B') { if (key.p1.length !== cfg.n1) errs.push('Tab Bộ GD cần đúng ' + cfg.n1 + ' câu Phần I (mã có ' + key.p1.length + ').'); if (key.p2.length !== cfg.n2) errs.push('Cần đúng ' + cfg.n2 + ' câu Phần II.'); if (key.p3.length !== cfg.n3) errs.push('Cần đúng ' + cfg.n3 + ' câu Phần III.'); }
+    if (tabId === 'B') { if (key.p1.length !== cfg.n1) errs.push('Tab Bộ GD cần đúng ' + cfg.n1 + ' câu Phần I (mã có ' + key.p1.length + ').'); }
     if (errs.length) { openModal('Đáp án chưa hợp lệ', '<div class="note bad">' + errs.map(h).join('<br>') + '</div><button class="btn" data-act="close">Đóng</button>'); return false; }
     t.keys[key.made] = key;
     S.tab = tabId; S.view = 'keys';
@@ -11706,7 +12505,6 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (code && code.data) importKeyText(code.data); else toast('Không thấy mã QR trong ảnh.', 3500);
     }).catch((e) => { unbusy(); toast('Không mở được ảnh: ' + e.message, 3500); });
   }
-
   function keyEditorHtml(key) {
     const cfg = ST.cfg();
     key = key || { made: '', p1: '', p2: [], p3: [] };
@@ -11726,16 +12524,90 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return { key: { tab: S.tab, made, p1, p2, p3 }, rest };
   }
 
+  /* ===================================================== danh sách học sinh */
+  function rosterHtml() {
+    const t = tab();
+    let o = '<div class="grid2"><label class="btn primary" for="fileRoster">📂 Chọn tệp (.xlsx .docx .csv)</label><button class="btn" data-act="roster-paste">📋 Dán / nhập</button></div>';
+    if (!t.lists.length) o += '<div class="note info">Chưa có danh sách nào cho tab này.</div>';
+    t.lists.forEach((l) => {
+      o += '<div class="card"><div class="row"><div style="flex:1"><label class="f" style="margin-top:0">' + (l.kind === 'room' ? 'Danh sách theo phòng (khóa: số báo danh)' : 'Danh sách theo lớp (khóa: STT trong lớp)') + '</label><input type="text" data-act="lname" data-id="' + h(l.id) + '" value="' + h(l.name) + '"></div></div>' +
+        '<div class="kv"><span>Số học sinh</span><span><b>' + l.rows.length + '</b></span></div>' +
+        '<button class="btn small danger" style="margin-top:8px;width:100%" data-act="rdel" data-id="' + h(l.id) + '">Xóa danh sách này</button></div>';
+    });
+    o += '<div class="foot-note">Hiểu quy tắc: mục 7 từ 3 chữ số = SBD (danh sách theo phòng); 1–2 chữ số = STT (danh sách theo lớp, chọn lớp khi chấm). Tên lớp lấy từ ô "LỚP: …" của Excel hoặc do thầy đặt.</div>';
+    return o;
+  }
+  async function importRosterFile(file) {
+    busy('Đang đọc danh sách…');
+    try {
+      const nm = file.name.toLowerCase(); let parsed;
+      if (/\.xlsx$/.test(nm)) parsed = await R.parseXlsx(await file.arrayBuffer());
+      else if (/\.docx$/.test(nm)) parsed = await R.parseDocx(await file.arrayBuffer());
+      else if (/\.(xls|doc)$/.test(nm)) { unbusy(); toast('Tệp .xls/.doc cũ chưa đọc được: mở bằng Excel/Word rồi "Lưu thành" .xlsx/.docx.', 5000); return; }
+      else parsed = R.parseText(await file.text());
+      unbusy();
+      previewImport(parsed, file.name);
+    } catch (e) { unbusy(); toast('Không đọc được tệp: ' + e.message, 4500); }
+  }
+  let importCtx = null;
+  function previewImport(parsed, filename) {
+    importCtx = parsed.lists;
+    let o = '<div class="meta" style="margin-top:0">Tệp: <b>' + h(filename) + '</b></div>';
+    parsed.warnings.forEach((w) => { o += '<div class="note warn">' + h(w) + '</div>'; });
+    if (!parsed.lists.length) { openModal('Nhập danh sách', o + '<button class="btn" data-act="close">Đóng</button>'); return; }
+    parsed.lists.forEach((l, i) => {
+      o += '<div class="card"><label class="f" style="margin-top:0">Tên danh sách / tên lớp</label><input type="text" id="pn' + i + '" value="' + h(l.name) + '">' +
+        '<label class="f">Loại</label><select id="pk' + i + '"><option value="class"' + (l.kind === 'class' ? ' selected' : '') + '>Theo lớp (ghép bằng STT trong lớp)</option><option value="room"' + (l.kind === 'room' ? ' selected' : '') + '>Theo phòng (ghép bằng số báo danh)</option></select>' +
+        '<div class="kv" style="margin-top:8px"><span>Số học sinh</span><span><b>' + l.rows.length + '</b></span></div>' +
+        l.rows.slice(0, 3).map((r) => '<div class="kv"><span>' + (r.sbd ? h(r.sbd) : 'STT ' + r.stt) + '</span><span>' + h(r.name) + (r.lop && l.kind === 'room' ? ' · ' + h(r.lop) : '') + '</span></div>').join('') + '</div>';
+    });
+    o += '<button class="btn primary big" data-act="rimport">Nhập vào ' + h(TABNAME[S.tab]) + '</button>';
+    openModal('Nhập danh sách', o);
+  }
+  function doImport() {
+    const lists = importCtx || [];
+    for (let i = 0; i < lists.length; i++) {
+      const nm = ($('#pn' + i).value || '').trim(), kind = $('#pk' + i).value;
+      if (!nm) { toast('Đặt tên cho danh sách (ví dụ tên lớp).', 3500); return; }
+      if (kind === 'room' && lists[i].rows.some((r) => !R.digits(r.sbd))) { toast('Danh sách "' + nm + '" chọn loại theo phòng nhưng có dòng không có SBD.', 4500); return; }
+      lists[i].name = nm; lists[i].kind = kind;
+    }
+    const res = ST.addLists(S.tab, lists);
+    importCtx = null;
+    if (res.conflicts.length) {
+      window.__conf = res.conflicts;
+      let o = '<div class="note warn">Có ' + res.conflicts.length + ' học sinh trùng khóa nhưng khác tên. Mặc định giữ tên cũ.</div>';
+      res.conflicts.forEach((c, i) => {
+        o += '<div class="card"><div class="kv"><span>Tên cũ</span><span>' + h(c.old) + '</span></div><div class="kv"><span>Tên mới</span><span>' + h(c.neu) + '</span></div>' +
+          '<div class="chk"><input type="checkbox" id="cf' + i + '"><span>Dùng tên mới</span></div></div>';
+      });
+      o += '<button class="btn primary" data-act="conf-apply">Áp dụng</button>';
+      openModal('Xung đột tên', o);
+      return;
+    }
+    openModal('Danh sách học sinh', rosterHtml());
+    render();
+    toast('Đã nhập: thêm ' + res.added + ', trùng khớp ' + res.same);
+  }
+
+  function missingHtml() {
+    const miss = ST.missing(S.tab);
+    if (!miss.length) return '<div class="note ok">Mọi học sinh trong danh sách đều đã có bài.</div>';
+    const groups = {};
+    miss.forEach((m) => { (groups[m.list] = groups[m.list] || []).push(m); });
+    return Object.keys(groups).map((g) => '<h3>' + h(g) + ' — còn ' + groups[g].length + '</h3><div class="card">' + groups[g].map((m) => '<div class="kv"><span>' + (m.kind === 'room' ? h(m.sbd) : 'STT ' + m.stt) + '</span><span>' + h(m.name) + '</span></div>').join('') + '</div>').join('');
+  }
+
   /* ===================================================== xuất tệp */
   function fname(ext) {
-    const t = ST.tab(), d = new Date();
+    const t = tab(), d = new Date();
     const slug = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
     return ['Ket-qua-cham', slug(t.info.mon), slug(t.info.lop), d.getFullYear() + '-' + U.pad(d.getMonth() + 1, 2) + '-' + U.pad(d.getDate(), 2)].filter(Boolean).join('_') + '.' + ext;
   }
-  function offerFile(name, blob, mime) {
+  function offerFile(name, blob, mime, extra) {
     const file = (typeof File !== 'undefined') ? new File([blob], name, { type: mime }) : null;
     lastFile = { name, blob, file, mime };
-    openModal('Tệp đã sẵn sàng', '<div class="card"><b>' + h(name) + '</b><div class="meta">' + Math.round(blob.size / 1024) + ' KB</div></div>' +
+    openModal('Tệp đã sẵn sàng', (extra || '') + '<div class="card"><b>' + h(name) + '</b><div class="meta">' + Math.round(blob.size / 1024) + ' KB</div></div>' +
       '<button class="btn primary big" data-act="sharefile">📤 Chia sẻ / Lưu vào Tệp</button><button class="btn" data-act="dlfile">⬇️ Tải xuống</button><button class="btn" data-act="close">Đóng</button>' +
       '<div class="note info">Trên iPhone: chọn "Lưu vào Tệp" trong bảng chia sẻ, hoặc mở bằng Word / Pages.</div>');
   }
@@ -11753,7 +12625,6 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     a.href = url; a.download = lastFile.name; doc.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 15000);
   }
-
   function docxOptionsHtml() {
     return '<div class="card"><div class="chk"><input type="checkbox" id="oPerQ"><span>Thêm bảng tỉ lệ làm đúng từng câu</span></div><div class="chk"><input type="checkbox" id="oDetail"><span>Thêm phiếu chi tiết từng học sinh (mỗi em một trang)</span></div></div><button class="btn primary big" data-act="docxgo">Tạo tệp .docx</button><button class="btn" data-act="close">Hủy</button>';
   }
@@ -11764,22 +12635,134 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const flagged = [];
     rows.forEach((r) => {
       const txt = [];
-      if (r.noKey) txt.push('Chưa có đáp án mã đề ' + r.made + ' (điểm chưa tính)');
-      r.flags.filter((f) => f.severity !== 'info').forEach((f) => { if (!(ST.tab(tabId).results.find((x) => x.id === r.id).fixed || {})[flagKey(f)]) txt.push(f.text); });
+      if (r.noKey) txt.push('Chưa có đáp án hợp lệ mã đề ' + r.made + ' (điểm chưa tính)');
+      if (r.status === 'manual') txt.push('Chấm tay');
+      const fx = r.raw.fixed || {};
+      r.flags.filter((f) => f.severity !== 'info').forEach((f) => { if (!fx[flagKey(f)]) txt.push(f.text); });
       if (!r.ten) txt.push('Chưa có trong danh sách');
-      if (txt.length) flagged.push({ ten: r.ten, sbd: r.sbd, text: txt.join('; ') });
+      if (txt.length) flagged.push({ ten: r.ten, sbd: r.idLabel, text: txt.join('; ') });
     });
     const info = t.info, sub1 = [info.kyThi ? 'Kỳ thi: ' + info.kyThi : '', info.mon ? 'Môn: ' + info.mon : ''].filter(Boolean).join(' — ');
     const sub2 = [info.lop ? 'Lớp: ' + info.lop : '', info.ngay ? 'Ngày thi: ' + info.ngay : ''].filter(Boolean).join(' — ');
     const totMax = tabId === 'T' ? mp.total : mp.tn;
+    const missing = ST.missing(tabId).map((m) => ({ stt: m.stt, ten: m.name, lop: m.lop, sbd: m.sbd || '' }));
     const data = {
       title: 'KẾT QUẢ CHẤM TRẮC NGHIỆM', subtitle: [sub1, sub2, TABNAME[tabId]].filter(Boolean),
       maxLine: 'Điểm tối đa: Phần 1 ' + fmt(mp.p1) + ' | Phần 2 ' + fmt(mp.p2) + ' | Phần 3 ' + fmt(mp.p3) + (hasTL ? ' | Tự luận ' + fmt(cfg.tlMax) : '') + ' | Tổng ' + fmt(totMax),
-      hasTL, rows, flagged, stats: SC.summarize(good.map((r) => ({ tong: r.tong, tongMax: totMax }))),
+      hasTL, hasLop: rows.some((r) => r.lop), rows, flagged, missing, stats: SC.summarize(good.map((r) => ({ tong: r.tong, tongMax: totMax }))),
       perQ: perQ && good.length ? SC.perQuestion(cfg, good.map((r) => r.sc)) : null,
       students: detail ? good : null,
     };
     return CP.docx.build(data);
+  }
+
+  /* ---- điền điểm vào tệp danh sách ---- */
+  const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  function scoredRows() { return ST.rows(S.tab).filter((r) => !r.noKey); }
+  function openFill(kind) {
+    const n = scoredRows().length;
+    if (!n) { toast('Chưa có bài nào đã tính điểm để điền.', 3500); return; }
+    fillCtx = { kind };
+    const desc = kind === 'docx'
+      ? 'Chọn <b>danh sách phòng thi (.docx)</b> có các cột "Số báo danh", "Họ và tên", "Điểm". App điền cột Điểm theo số báo danh, lưu thành <b>bản sao</b> (tệp gốc không đổi). Chỉ các bài chấm theo SBD được điền.'
+      : 'Chọn <b>sổ điểm (.xlsx)</b> có cột "Số TT", "Họ và tên" và "ĐĐG GK/CK". App điền điểm theo STT trong lớp (bài chấm theo SBD thì ghép theo họ tên), lưu thành <b>bản sao</b>. Điểm giữ nguyên, không làm tròn.';
+    openModal(kind === 'docx' ? 'Điền điểm vào danh sách phòng thi' : 'Điền điểm vào sổ điểm', '<div class="note info">' + desc + '</div><div class="meta">Số bài đã tính điểm: <b>' + n + '</b></div><label class="btn primary big" for="fileFill">📂 Chọn tệp ' + (kind === 'docx' ? '.docx' : '.xlsx') + '</label>');
+    $('#fileFill').setAttribute('accept', kind === 'docx' ? '.docx' : '.xlsx');
+  }
+  async function handleFillFile(file) {
+    if (!fillCtx) return;
+    const kind = fillCtx.kind;
+    busy('Đang đọc tệp…');
+    try {
+      const buf = await file.arrayBuffer();
+      if (kind === 'docx') {
+        const rows = scoredRows().filter((r) => r.mode === 'sbd');
+        const res = await F.fillDocx(buf, rows.map((r) => ({ sbd: r.sbd, score: r.tong })));
+        unbusy();
+        if (res.error) { openModal('Không điền được', '<div class="note bad">' + h(res.error) + '</div><button class="btn" data-act="close">Đóng</button>'); return; }
+        const base = file.name.replace(/\.docx$/i, '');
+        const rep = '<div class="note ok"><b>Đã điền ' + res.matched.length + ' học sinh</b> vào cột Điểm.</div>' +
+          (res.rowsNoScore.length ? '<div class="note warn">' + res.rowsNoScore.length + ' học sinh trong tệp chưa có điểm (chưa chấm hoặc chấm theo STT lớp).</div>' : '') +
+          (res.unused.length ? '<div class="note warn">' + res.unused.length + ' bài không tìm thấy SBD trong tệp: ' + res.unused.slice(0, 8).map((u) => h(u.sbd)).join(', ') + (res.unused.length > 8 ? '…' : '') + '</div>' : '');
+        offerFile(base + '_da_dien_diem.docx', new Blob([res.bytes], { type: MIME_DOCX }), MIME_DOCX, rep);
+      } else {
+        const ins = await F.inspectXlsx(buf);
+        unbusy();
+        if (!ins) { openModal('Không điền được', '<div class="note bad">Không thấy bảng có cột "Số TT" và "Họ và tên" trong tệp Excel này.</div><button class="btn" data-act="close">Đóng</button>'); return; }
+        fillCtx = { kind, buf, name: file.name, ins };
+        if (ins.type === 'room') {
+          const nSbd = scoredRows().filter((r) => r.mode === 'sbd').length, nStt = scoredRows().filter((r) => r.mode !== 'sbd').length;
+          let o = '<div class="note info">Danh sách phòng thi (.xlsx) có <b>' + ins.sheets.length + '</b> trang có cột SBD và Điểm: ' + ins.sheets.map((x) => h(x.name) + ' (' + x.rows + ')').join(', ') + '.</div>' +
+            '<div class="meta">App điền cột <b>Điểm</b> theo SBD ở <b>mọi trang</b> có học sinh đó, lưu thành <b>bản sao</b>. Bài chấm theo SBD: <b>' + nSbd + '</b>.' + (nStt ? ' Bài chấm theo STT lớp (' + nStt + ') không điền được vào danh sách phòng.' : '') + ' Điểm giữ nguyên, không làm tròn.</div>' +
+            '<button class="btn primary big" data-act="fillgo">Điền điểm</button>';
+          openModal('Điền điểm vào danh sách phòng thi', o);
+          return;
+        }
+        const g = ins.gradeCols, def = g.gk ? 'gk' : g.ck ? 'ck' : '';
+        const nOwn = ST.rows(S.tab).filter((r) => !r.noKey && ((r.mode === 'stt' && (!r.lop || R.fold(r.lop) === R.fold(ins.lop))) || (r.mode === 'sbd' && r.ten))).length;
+        let o = '<div class="note info">Sổ điểm lớp <b>' + h(ins.lop || '(không rõ lớp)') + '</b>: ' + ins.rows + ' học sinh.</div>';
+        if (S.tab && tab().activeLop && R.fold(tab().activeLop) !== R.fold(ins.lop)) o += '<div class="note warn">Lớp đang chấm là ' + h(tab().activeLop) + ', khác lớp trong tệp. Chỉ bài đúng lớp ' + h(ins.lop) + ' được điền.</div>';
+        o += '<label class="f">Ghi điểm vào cột</label>' +
+          '<div class="chk"><input type="radio" name="fcol" value="gk"' + (def === 'gk' ? ' checked' : '') + (g.gk ? '' : ' disabled') + '><span>ĐĐG GK (giữa kì)' + (g.gk ? '' : ' — không có trong tệp') + '</span></div>' +
+          '<div class="chk"><input type="radio" name="fcol" value="ck"' + (def === 'ck' ? ' checked' : '') + (g.ck ? '' : ' disabled') + '><span>ĐĐG CK (cuối kì)' + (g.ck ? '' : ' — không có trong tệp') + '</span></div>' +
+          '<div class="meta">Bài có thể điền: khoảng <b>' + nOwn + '</b>. Điểm ghi đúng giá trị đã chấm, không làm tròn.</div>' +
+          '<button class="btn primary big" data-act="fillgo">Điền điểm</button>';
+        openModal('Điền điểm vào sổ điểm', o);
+      }
+    } catch (e) { unbusy(); toast('Không xử lý được tệp: ' + e.message, 5000); }
+  }
+  async function doFillXlsx() {
+    const c = fillCtx; if (!c || !c.buf) return;
+    if (c.ins && c.ins.type === 'room') {
+      busy('Đang điền điểm…');
+      try {
+        const res = await F.fillXlsxRoom(c.buf, scoredRows().filter((r) => r.mode === 'sbd').map((r) => ({ sbd: r.sbd, score: r.tong })));
+        unbusy();
+        if (res.error) { openModal('Không điền được', '<div class="note bad">' + h(res.error) + '</div><button class="btn" data-act="close">Đóng</button>'); return; }
+        const rep = '<div class="note ok"><b>Đã điền ' + res.matched.length + ' học sinh</b> vào cột Điểm.</div>' +
+          '<div class="meta">' + res.perSheet.map((x) => h(x.name) + ': ' + x.filled + '/' + x.total).join(' · ') + '</div>' +
+          (res.unused.length ? '<div class="note warn">' + res.unused.length + ' bài không thấy SBD trong tệp: ' + res.unused.slice(0, 8).map((u) => h(u.sbd)).join(', ') + (res.unused.length > 8 ? '…' : '') + '</div>' : '');
+        offerFile(c.name.replace(/\.xlsx$/i, '') + '_da_dien_diem.xlsx', new Blob([res.bytes], { type: MIME_XLSX }), MIME_XLSX, rep);
+      } catch (e) { unbusy(); toast('Không điền được: ' + e.message, 5000); }
+      return;
+    }
+    const sel = doc.querySelector('input[name="fcol"]:checked');
+    if (!sel) { toast('Chọn cột GK hoặc CK.', 3000); return; }
+    busy('Đang điền điểm…');
+    try {
+      const items = scoredRows().map((r) => ({ mode: r.mode, stt: r.stt, lop: r.lop, name: r.ten, score: r.tong }));
+      const res = await F.fillXlsx(c.buf, items, { col: sel.value });
+      unbusy();
+      if (res.error) { openModal('Không điền được', '<div class="note bad">' + h(res.error) + '</div><button class="btn" data-act="close">Đóng</button>'); return; }
+      const rep = '<div class="note ok"><b>Đã điền ' + res.matched.length + '/' + (res.matched.length + res.noScore.length) + ' học sinh</b> vào cột ' + (sel.value === 'gk' ? 'ĐĐG GK' : 'ĐĐG CK') + ' (' + res.matched.filter((m) => m.by === 'tên').length + ' bài ghép theo họ tên).</div>' +
+        (res.noScore.length ? '<div class="note warn">' + res.noScore.length + ' học sinh chưa có điểm: ' + res.noScore.slice(0, 6).map((n) => 'STT ' + n.stt).join(', ') + (res.noScore.length > 6 ? '…' : '') + '</div>' : '');
+      offerFile(c.name.replace(/\.xlsx$/i, '') + '_da_dien_diem.xlsx', new Blob([res.bytes], { type: MIME_XLSX }), MIME_XLSX, rep);
+    } catch (e) { unbusy(); toast('Không điền được: ' + e.message, 5000); }
+  }
+
+  /* ===================================================== hàng đợi phiếu lỗi */
+  function pendingHtml() {
+    const t = tab();
+    if (!t.pending.length) return '<div class="note ok">Không còn phiếu nào cần xử lý.</div>';
+    return t.pending.map((p) => {
+      const hint = HINT[p.reason] || ['Không đọc được phiếu.', ''];
+      const when = new Date(p.ts); const hh = U.pad(when.getHours(), 2) + ':' + U.pad(when.getMinutes(), 2);
+      return '<div class="card"><div class="kv"><span>Lúc ' + hh + ' · thử ' + p.attempts + ' lần</span><span>' + h(p.reason) + '</span></div><div class="meta" style="margin:6px 0">' + h(hint[0]) + '</div>' +
+        '<img data-thumb="p' + h(p.id) + '" alt="" style="width:100%;border-radius:10px;display:none">' +
+        '<div class="grid2" style="margin-top:8px"><label class="btn small" style="width:100%" for="fileCam" data-act="retry" data-id="' + h(p.id) + '">📷 Chụp lại</label><button class="btn small" style="width:100%" data-act="manual-pending" data-id="' + h(p.id) + '">✍️ Chấm tay</button></div>' +
+        '<button class="btn small danger" style="width:100%;margin-top:8px" data-act="pdel" data-id="' + h(p.id) + '">Bỏ phiếu này</button></div>';
+    }).join('');
+  }
+  function openPending() {
+    openModal('Phiếu cần xử lý', pendingHtml());
+    doc.querySelectorAll('img[data-thumb]').forEach((im) => { TH.get(im.getAttribute('data-thumb')).then((u) => { if (u) { im.src = u; im.style.display = 'block'; } }); });
+  }
+  function openManual(tabId, retryId) {
+    draft = newManualDraft(tabId, retryId);
+    draft.thumbKey = retryId ? 'p' + retryId : null;
+    openModal('Chấm tay', '<div class="note info">Nhập số báo danh hoặc STT, mã đề, rồi chạm các ô đáp án theo tờ giấy.</div>' + cardHtml(draft));
+    loadThumb(draft);
   }
 
   /* ===================================================== sự kiện */
@@ -11788,8 +12771,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     switch (a) {
       case 'tab': S.tab = v.v; ST.save(); render(); break;
       case 'view': S.view = v.v; ST.save(); render(); root.scrollTo(0, 0); break;
-      case 'close': closeModal(); break;
-      case 'live': openLive(); break;
+      case 'close': closeModal(); render(); break;
+      case 'scan-new': retryFor = null; break;
+      case 'live': retryFor = null; openLive(); break;
       case 'qrcam': openQrCam(); break;
       case 'manual': openModal('Nhập đáp án tay', keyEditorHtml(null)); break;
       case 'paste': openModal('Dán mã đáp án', '<label class="f">Dán chuỗi CP1… hoặc đường dẫn có #k=…</label><textarea id="kPaste" placeholder="CP1;B;0101;…"></textarea><div style="margin-top:12px"><button class="btn primary" data-act="pastego">Nhập</button></div>'); break;
@@ -11805,8 +12789,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       case 'open': {
         const r = ST.tab().results.find((x) => x.id === v.id); if (!r) return;
-        draft = JSON.parse(JSON.stringify(r)); draft.tabId = S.tab; draft.isNew = false; draft.canvas = null; draft.fixed = draft.fixed || {};
-        openModal('Bài đã chấm', cardHtml(draft)); break;
+        draft = JSON.parse(JSON.stringify(r)); draft.tabId = S.tab; draft.isNew = false; draft.canvas = null; draft.fixed = draft.fixed || {}; draft.manual = r.status === 'manual'; draft.thumbKey = 'r' + r.id;
+        openModal('Bài đã chấm', cardHtml(draft)); loadThumb(draft); break;
       }
       case 'cyc': {
         const f = v.f, q = +v.q;
@@ -11814,40 +12798,51 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         else { const o = ['', 'D', 'S'], i = +v.i; draft.ans.p2[q][i] = o[(o.indexOf(draft.ans.p2[q][i]) + 1) % o.length]; draft.fixed['p2-' + (q * 4 + i)] = 1; }
         refreshCard(); break;
       }
-      case 'setname': { draft.name = ($('#nm').value || '').trim(); if (draft.name && /^\d+$/.test(draft.sbd)) { ST.tab(draft.tabId).roster[draft.sbd] = draft.name; ST.save(); } refreshCard(); break; }
+      case 'setmode': { draft.mode = v.v; if (v.v === 'stt' && !draft.lop) draft.lop = tab().activeLop || ''; draft.fixed.sbd = 1; refreshCard(); break; }
+      case 'usesbd': { draft.mode = 'sbd'; draft.sbd = v.v; draft.fixed.sbd = 1; refreshCard(); break; }
+      case 'setname': { draft.name = ($('#nm').value || '').trim(); refreshCard(); break; }
       case 'save': saveDraft(false); break;
       case 'savenext': saveDraft(true); break;
-      case 'discard': closeModal(); break;
-      case 'del': if (root.confirm('Xóa bài này?')) { ST.removeResult(draft.tabId, draft.id); closeModal(); render(); } break;
+      case 'discard': { const rf = draft && draft.retryFor; closeModal(); if (rf) render(); break; }
+      case 'del': if (root.confirm('Xóa bài này?')) { ST.removeResult(draft.tabId, draft.id); TH.del('r' + draft.id); closeModal(); render(); } break;
+      case 'retry': retryFor = v.id; break;            // nhãn <label for=fileCam> tự mở bảng chụp ảnh
+      case 'retry-live': retryFor = v.id; closeModal(); openLive(); break;
+      case 'manual-sheet': openManual(S.tab, null); break;
+      case 'manual-pending': { const id = v.id; closeModal(); openManual(S.tab, id); break; }
+      case 'pending': openPending(); break;
+      case 'pdel': { const t = tab(); t.pending = t.pending.filter((p) => p.id !== v.id); TH.del('p' + v.id); ST.save(true); openPending(); render(); break; }
+      case 'missing': openModal('Học sinh chưa có bài', missingHtml()); break;
+      case 'roster': openModal('Danh sách học sinh — ' + TABNAME[S.tab], rosterHtml()); break;
+      case 'roster-paste': openModal('Dán danh sách học sinh', '<label class="f">Tên lớp (chỉ cần khi mỗi dòng chỉ có STT, không có SBD)</label><input type="text" id="rLop" placeholder="ví dụ 12A7"><label class="f">Mỗi dòng: STT hoặc số báo danh, rồi họ tên (dán từ Excel được)</label><textarea id="rTxt" placeholder="1, Nguyễn Văn An&#10;2, Trần Thị Bình"></textarea><div style="margin-top:12px"><button class="btn primary" data-act="roster-go">Đọc danh sách</button></div>'); break;
+      case 'roster-go': { const p = R.parseText($('#rTxt').value, ($('#rLop').value || '').trim()); previewImport(p, 'Dán trực tiếp'); break; }
+      case 'rimport': doImport(); break;
+      case 'conf-apply': { (window.__conf || []).forEach((c, i) => { const cb = $('#cf' + i); if (cb && cb.checked) ST.applyConflict(S.tab, c); }); window.__conf = null; openModal('Danh sách học sinh', rosterHtml()); render(); toast('Đã áp dụng'); break; }
+      case 'rdel': if (root.confirm('Xóa danh sách này?')) { ST.removeList(S.tab, v.id); openModal('Danh sách học sinh — ' + TABNAME[S.tab], rosterHtml()); render(); } break;
       case 'docx': openModal('Xuất kết quả .docx', docxOptionsHtml()); break;
       case 'docxgo': {
         const perQ = $('#oPerQ').checked, detail = $('#oDetail').checked;
         busy('Đang tạo tệp .docx…'); await tick();
-        try { const bytes = await buildDocx(perQ, detail); unbusy(); offerFile(fname('docx'), new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'); }
+        try { const bytes = await buildDocx(perQ, detail); unbusy(); offerFile(fname('docx'), new Blob([bytes], { type: MIME_DOCX }), MIME_DOCX); }
         catch (e) { unbusy(); toast('Không tạo được .docx: ' + e.message, 4500); }
         break;
       }
+      case 'fill-docx': openFill('docx'); break;
+      case 'fill-xlsx': openFill('xlsx'); break;
+      case 'fillgo': doFillXlsx(); break;
       case 'csv': offerFile(fname('csv'), new Blob([ST.csv(S.tab)], { type: 'text/csv;charset=utf-8' }), 'text/csv'); break;
       case 'backup': offerFile(fname('json').replace('Ket-qua-cham', 'Sao-luu-cham'), new Blob([ST.exportJson()], { type: 'application/json' }), 'application/json'); break;
       case 'sharefile': shareFile(); break;
       case 'dlfile': downloadFile(); break;
       case 'wipe': if (root.confirm('Xóa TẤT CẢ kết quả của tab này? Không hoàn tác được.')) { ST.tab().results = []; ST.save(true); render(); } break;
-      case 'roster-paste': openModal('Danh sách học sinh', '<label class="f">Mỗi dòng: số báo danh, họ tên (dán từ Excel được)</label><textarea id="rTxt" placeholder="12345678, Nguyễn Văn An&#10;12345679, Trần Thị Bích"></textarea><div style="margin-top:12px"><button class="btn primary" data-act="roster-go">Lưu danh sách</button></div>'); break;
-      case 'roster-go': rosterImport($('#rTxt').value); break;
-      case 'roster-clear': if (root.confirm('Xóa danh sách học sinh của tab này?')) { ST.tab().roster = {}; ST.save(true); render(); } break;
       default: break;
     }
-  }
-  function rosterImport(text) {
-    const r = ST.parseRoster(text), n = Object.keys(r.map).length;
-    if (!n) { toast('Không đọc được dòng nào. Mỗi dòng cần số báo danh và họ tên.', 4000); return; }
-    const t = ST.tab(); t.roster = Object.assign({}, t.roster, r.map); ST.save(true);
-    closeModal(); render(); toast('Đã nhập ' + n + ' học sinh' + (r.bad.length ? ' (bỏ qua ' + r.bad.length + ' dòng lỗi)' : ''), 3800);
   }
 
   function onChange(el) {
     const a = el.dataset.act, v = el.dataset;
     if (a === 'info') { ST.tab().info[v.k] = el.value.trim(); ST.save(); return; }
+    if (a === 'lop') { ST.tab().activeLop = el.value; ST.save(true); render(); return; }
+    if (a === 'lname') { const l = ST.tab().lists.find((x) => x.id === v.id); if (l && el.value.trim()) { l.name = el.value.trim(); ST.save(true); render(); } return; }
     if (a === 'cfg') {
       const cfg = ST.cfg('T');
       if (v.k === 'p2Mode') cfg.p2Mode = el.value;
@@ -11856,7 +12851,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       ST.save(true); render(); return;
     }
     if (!draft) return;
-    if (a === 'sbd') { draft.sbd = el.value.replace(/\s/g, ''); draft.fixed.sbd = 1; refreshCard(); }
+    if (a === 'sbd') { draft.sbd = el.value.replace(/\D/g, ''); if (draft.mode === 'none') draft.mode = 'sbd'; draft.fixed.sbd = 1; refreshCard(); }
+    else if (a === 'stt') { const n = parseInt(el.value, 10); draft.stt = isNaN(n) ? null : n; draft.fixed.sbd = 1; refreshCard(); }
+    else if (a === 'dlop') { draft.lop = el.value; refreshCard(); }
     else if (a === 'made') { draft.made = el.value.replace(/\s/g, ''); draft.fixed.made = 1; refreshCard(); }
     else if (a === 'tl') { const n = parseNum(el.value); draft.tl = n == null ? null : n; refreshCard(); }
     else if (a === 'p3') { draft.ans.p3[+v.q] = SC.normNum(el.value); draft.fixed['p3-' + v.q] = 1; refreshCard(); }
@@ -11872,14 +12869,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $('#fileCam').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) processFile(f, 'file'); });
     $('#filePick').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) processFile(f, 'file'); });
     $('#fileQr').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) decodeQrFile(f); });
-    $('#fileRoster').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; const rd = new FileReader(); rd.onload = () => rosterImport(String(rd.result)); rd.readAsText(f, 'utf-8'); });
+    $('#fileRoster').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importRosterFile(f); });
+    $('#fileFill').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) handleFillFile(f); });
     $('#fileJson').addEventListener('change', (e) => {
       const f = e.target.files[0]; e.target.value = ''; if (!f) return;
       const rd = new FileReader();
       rd.onload = () => { if (!root.confirm('Khôi phục sẽ thay toàn bộ dữ liệu hiện tại. Tiếp tục?')) return; const r = ST.importJson(String(rd.result)); if (r.ok) { render(); toast('Đã khôi phục dữ liệu'); } else toast(r.error, 4000); };
       rd.readAsText(f, 'utf-8');
     });
-    // đáp án từ đường dẫn #k=
     function fromHash() {
       if (/[#&]k=/.test(root.location.hash)) { const hsh = root.location.hash; try { root.history.replaceState(null, '', root.location.pathname + root.location.search); } catch (e) { /* bỏ qua */ } importKeyText(hsh); }
     }
