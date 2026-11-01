@@ -11884,11 +11884,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const rooms = [];
     for (const sh of sheets) { const sc = roomScan(sh.grid); if (sc) rooms.push({ name: sh.name, rows: sc.items.length }); }
     if (rooms.length) return { type: 'room', sheets: rooms, rows: rooms.reduce((a, x) => a + x.rows, 0) };
+    const cls = [];
     for (const sh of sheets) {
       const L = R._listFromGrid(sh.grid, sh.name, []);
-      if (L) return { type: 'class', sheet: sh.name, lop: L.name, rows: L.rows.length, gradeCols: L.meta.gradeCols };
+      if (L) cls.push({ sheet: sh.name, lop: L.name, rows: L.rows.length, gradeCols: L.meta.gradeCols });
     }
-    return null;
+    if (!cls.length) return null;
+    return { type: 'class', sheet: cls[0].sheet, lop: cls[0].lop, rows: cls[0].rows, gradeCols: cls[0].gradeCols, classes: cls };
   };
 
   /** results: [{mode:'stt'|'sbd', stt, lop, name, score}]. opts: {col:'gk'|'ck'|<số cột 1-based>, lop}
@@ -11897,9 +11899,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const JSZipC = getZip();
     const zip = await JSZipC.loadAsync(buf);
     const sheets = await R._xlsxSheets(zip);
-    let sh = null, L = null;
-    for (const s of sheets) { const l = R._listFromGrid(s.grid, s.name, []); if (l) { sh = s; L = l; break; } }
-    if (!L) return { error: 'Không thấy bảng có cột "Số TT" và "Họ và tên học sinh" trong tệp Excel này.' };
+    let sh = null, L = null, nList = 0;
+    for (const s of sheets) {
+      const l = R._listFromGrid(s.grid, s.name, []); if (!l) continue; nList++;
+      if (opts.lop ? R.fold(l.name) === R.fold(opts.lop) : !L) { sh = s; L = l; if (opts.lop) break; }
+    }
+    if (!L) return { error: nList ? 'Tệp Excel không có trang của lớp ' + opts.lop + '. Chọn đúng lớp trong tệp.' : 'Không thấy bảng có cột "Số TT" và "Họ và tên học sinh" trong tệp Excel này.' };
     let colN = opts.col;
     if (colN === 'gk' || colN === 'ck') colN = L.meta.gradeCols[colN];
     else if (typeof colN !== 'number') colN = null;
@@ -12705,14 +12710,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           openModal('Điền điểm vào danh sách phòng thi', o);
           return;
         }
-        const g = ins.gradeCols, def = g.gk ? 'gk' : g.ck ? 'ck' : '';
-        const nOwn = ST.rows(S.tab).filter((r) => !r.noKey && ((r.mode === 'stt' && (!r.lop || R.fold(r.lop) === R.fold(ins.lop))) || (r.mode === 'sbd' && r.ten))).length;
-        let o = '<div class="note info">Sổ điểm lớp <b>' + h(ins.lop || '(không rõ lớp)') + '</b>: ' + ins.rows + ' học sinh.</div>';
-        if (S.tab && tab().activeLop && R.fold(tab().activeLop) !== R.fold(ins.lop)) o += '<div class="note warn">Lớp đang chấm là ' + h(tab().activeLop) + ', khác lớp trong tệp. Chỉ bài đúng lớp ' + h(ins.lop) + ' được điền.</div>';
+        const cls = ins.classes || [{ sheet: ins.sheet, lop: ins.lop, rows: ins.rows, gradeCols: ins.gradeCols }];
+        const act = S.tab ? tab().activeLop : '';
+        const pick = cls.find((c) => act && R.fold(c.lop) === R.fold(act)) || cls[0];
+        const g = pick.gradeCols, def = g.gk ? 'gk' : g.ck ? 'ck' : '';
+        const nOwn = ST.rows(S.tab).filter((r) => !r.noKey && r.status !== 'review' && ((r.mode === 'stt' && (!r.lop || R.fold(r.lop) === R.fold(pick.lop))) || (r.mode === 'sbd' && r.ten))).length;
+        let o = '';
+        if (cls.length > 1) {
+          o += '<div class="note info">Tệp có <b>' + cls.length + '</b> lớp. Chọn đúng lớp cần điền:</div><label class="f">Lớp trong tệp</label><select class="inl" id="fcls" style="width:100%">' + cls.map((c) => '<option value="' + h(c.lop) + '"' + (c === pick ? ' selected' : '') + '>' + h(c.lop) + ' (' + c.rows + ' học sinh)</option>').join('') + '</select>';
+          if (!act || !cls.some((c) => R.fold(c.lop) === R.fold(act))) o += '<div class="note warn">Chưa chọn lớp đang chấm khớp với tệp: kiểm tra kỹ lớp ở trên trước khi bấm Điền.</div>';
+        } else o += '<div class="note info">Sổ điểm lớp <b>' + h(pick.lop || '(không rõ lớp)') + '</b>: ' + pick.rows + ' học sinh.</div>';
         o += '<label class="f">Ghi điểm vào cột</label>' +
           '<div class="chk"><input type="radio" name="fcol" value="gk"' + (def === 'gk' ? ' checked' : '') + (g.gk ? '' : ' disabled') + '><span>ĐĐG GK (giữa kì)' + (g.gk ? '' : ' — không có trong tệp') + '</span></div>' +
           '<div class="chk"><input type="radio" name="fcol" value="ck"' + (def === 'ck' ? ' checked' : '') + (g.ck ? '' : ' disabled') + '><span>ĐĐG CK (cuối kì)' + (g.ck ? '' : ' — không có trong tệp') + '</span></div>' +
-          '<div class="meta">Bài có thể điền: khoảng <b>' + nOwn + '</b>. Điểm ghi đúng giá trị đã chấm, không làm tròn.</div>' +
+          '<div class="meta">Bài có thể điền: khoảng <b>' + nOwn + '</b>. Điểm ghi đúng giá trị đã chấm, không làm tròn. Chỉ bài của lớp đã chọn được điền.</div>' +
           '<button class="btn primary big" data-act="fillgo">Điền điểm</button>';
         openModal('Điền điểm vào sổ điểm', o);
       }
@@ -12738,7 +12749,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     busy('Đang điền điểm…');
     try {
       const items = scoredRows().map((r) => ({ mode: r.mode, stt: r.stt, lop: r.lop, name: r.ten, score: r.tong }));
-      const res = await F.fillXlsx(c.buf, items, { col: sel.value });
+      const clsSel = doc.querySelector('#fcls');
+      const res = await F.fillXlsx(c.buf, items, { col: sel.value, lop: clsSel ? clsSel.value : undefined });
       unbusy();
       if (res.error) { openModal('Không điền được', '<div class="note bad">' + h(res.error) + '</div><button class="btn" data-act="close">Đóng</button>'); return; }
       const rep = '<div class="note ok"><b>Đã điền ' + res.matched.length + '/' + (res.matched.length + res.noScore.length) + ' học sinh</b> vào cột ' + (sel.value === 'gk' ? 'ĐĐG GK' : 'ĐĐG CK') + ' (' + res.matched.filter((m) => m.by === 'tên').length + ' bài ghép theo họ tên).</div>' +
